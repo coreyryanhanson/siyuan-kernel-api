@@ -1,6 +1,6 @@
 {
 	"name": "siyuan-kernel-api",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "Typed client for the SiYuan kernel HTTP API. Zero runtime dependencies.",
 	"type": "module",
 	"main": "./index.ts",
