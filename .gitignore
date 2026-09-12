@@ -141,3 +141,9 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Vitest cache
+.vitest/
+
+# Temporarily untrack package-lock until package matures
+package-lock.json

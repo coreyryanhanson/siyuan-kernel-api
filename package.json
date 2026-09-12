@@ -1,0 +1,30 @@
+{
+  "name": "siyuan-kernel-api",
+  "version": "0.1.0",
+  "description": "Typed client for the SiYuan kernel HTTP API. Zero runtime dependencies.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src/index.ts"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "Corey Ryan Hanson",
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
