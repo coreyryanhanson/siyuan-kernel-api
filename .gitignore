@@ -145,5 +145,4 @@ vite.config.ts.timestamp-*
 # Vitest cache
 .vitest/
 
-# Temporarily untrack package-lock until package matures
-package-lock.json
+/.husky/_
