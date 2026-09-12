@@ -2,8 +2,15 @@
 // production sources: every root module must ship, and nothing else may.
 import { execSync } from "node:child_process";
 
-const pack = execSync("npm pack --dry-run --json", { encoding: "utf8" });
-const packed = JSON.parse(pack)[0].files.map((f) => f.path).sort();
+// --ignore-scripts is load-bearing: npm runs `prepare` (husky) around the
+// pack, and husky prints to stdout on its skip paths (`.git can't be found` on
+// artifact checkouts), corrupting the JSON parse below.
+const pack = execSync("npm pack --dry-run --json --ignore-scripts", {
+	encoding: "utf8",
+});
+const packed = JSON.parse(pack)[0]
+	.files.map((f) => f.path)
+	.sort();
 
 const expected = execSync("git ls-files '*.ts'", { encoding: "utf8" })
 	.split("\n")

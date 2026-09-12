@@ -1,6 +1,6 @@
 {
 	"name": "siyuan-kernel-api",
-	"version": "0.1.0",
+	"version": "0.0.0",
 	"description": "Typed client for the SiYuan kernel HTTP API. Zero runtime dependencies.",
 	"type": "module",
 	"main": "./index.ts",
@@ -12,12 +12,15 @@
 		}
 	},
 	"files": [
-		"index.ts"
+		"index.ts",
+		"client.ts",
+		"errors.ts",
+		"types.ts"
 	],
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"prepublishOnly": "npm test && npx tsc --noEmit",
+		"prepublishOnly": "npm test && npx tsc --noEmit && node scripts/check-pack.mjs",
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
@@ -32,6 +35,7 @@
 	"author": "Corey Ryan Hanson",
 	"license": "AGPL-3.0-or-later",
 	"devDependencies": {
+		"@types/node": "22.20.2",
 		"husky": "9.1.7",
 		"lint-staged": "17.5.1",
 		"oxfmt": "0.66.0",
