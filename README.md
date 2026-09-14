@@ -22,7 +22,7 @@ import { SiYuanKernelClient } from "siyuan-kernel-api";
 const client = new SiYuanKernelClient("http://127.0.0.1:6806", "<api-token>");
 
 const version = await client.getVersion();
-const notebooks = await client.listNotebooks();
+const { notebooks } = await client.listNotebooks();
 
 const rows = await client.query(
   "SELECT id, content, root_id FROM blocks WHERE type = 'd' LIMIT 10",
@@ -43,7 +43,7 @@ const children = await client.getChildBlocks("<block-id>");
 | Method | Kernel route | Notes |
 | --- | --- | --- |
 | `getVersion()` | `/api/system/version` | Raw version string |
-| `listNotebooks()` | `/api/notebook/lsNotebooks` | Unwraps `data.notebooks` |
+| `listNotebooks()` | `/api/notebook/lsNotebooks` | Returns `data`: `{ boxDocEnabled, notebooks }`. Rows carry `subFileCount` (absent on kernels older than v3.7.3), which is 0 unless the workspace's box-doc setting is on and the notebook is open (also 0 for an empty or unreadable notebook) |
 | `createNotebook(name)` | `/api/notebook/createNotebook` | Returns the new notebook row (`id`, `closed`, …); an empty/whitespace name gets the kernel's default name |
 | `createEncryptedNotebook(name, password)` | `/api/notebook/createEncryptedNotebook` | The encrypted counterpart of `createNotebook`: returns the new notebook row, mounted and unlocked. Requires workspace encryption to already be enabled — check `getEncryptedNotebookStatus()` first. The password transits plaintext over HTTP |
 | `removeNotebook(id)` | `/api/notebook/removeNotebook` | Posts the id as `notebook`; a well-formed but unknown id is a silent success |

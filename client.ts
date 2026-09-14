@@ -11,6 +11,7 @@ import type {
 	EncryptedNotebookStatus,
 	ExportMarkdownResult,
 	NotebookInfo,
+	NotebookList,
 	SearchResult,
 } from "./types.js";
 
@@ -256,15 +257,18 @@ export class SiYuanKernelClient {
 	}
 
 	/**
-	 * `/api/notebook/lsNotebooks` — unwraps `data.notebooks`. The unwrap is
-	 * guarded: a `code: 0` success envelope whose `data` carries no
+	 * `/api/notebook/lsNotebooks` — returns the `data` envelope, including the
+	 * `boxDocEnabled` gate for `NotebookInfo.subFileCount`. The `notebooks`
+	 * unwrap is guarded: a `code: 0` success envelope whose `data` carries no
 	 * `notebooks` field (missing or `null`) surfaces as `SiYuanApiError`,
 	 * never a raw `TypeError` (same as createNotebook).
 	 */
-	async listNotebooks(): Promise<NotebookInfo[]> {
-		const data = await this.request<{
-			notebooks?: NotebookInfo[];
-		}>("/api/notebook/lsNotebooks", {}, { retryable: true });
+	async listNotebooks(): Promise<NotebookList> {
+		const data = await this.request<NotebookList>(
+			"/api/notebook/lsNotebooks",
+			{},
+			{ retryable: true },
+		);
 		if (data?.notebooks == null) {
 			throw new SiYuanApiError(
 				200,
@@ -272,7 +276,7 @@ export class SiYuanKernelClient {
 				"envelope data carries no notebooks",
 			);
 		}
-		return data.notebooks;
+		return data;
 	}
 
 	/**

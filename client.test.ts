@@ -372,18 +372,26 @@ describe("retry policy", () => {
 describe("endpoint surface", () => {
 	const okBody = <T>(data: T) => jsonResponse(200, envelope(data));
 
-	it("listNotebooks hits lsNotebooks and unwraps data.notebooks", async () => {
-		// `boxDocEnabled` is an envelope-level field in the kernel; here it only
-		// proves Record<string, unknown> pass-through on rows.
+	it("listNotebooks hits lsNotebooks and returns the full envelope", async () => {
 		const { fn, calls } = mockFetch(() =>
-			okBody({ notebooks: [{ id: "b1", name: "NB", boxDocEnabled: true }] }),
+			okBody({
+				boxDocEnabled: false,
+				notebooks: [
+					{ id: "b1", name: "NB", subFileCount: 3 },
+					{ id: "b2", name: "NB2" },
+				],
+			}),
 		);
-		const notebooks = await client(fn).listNotebooks();
+		const result = await client(fn).listNotebooks();
 		expect(calls[0]!.url).toBe(
 			"http://127.0.0.1:6806/api/notebook/lsNotebooks",
 		);
 		expect(calls[0]!.init.body).toBe(JSON.stringify({}));
-		expect(notebooks).toEqual([{ id: "b1", name: "NB", boxDocEnabled: true }]);
+		expect(result.boxDocEnabled).toBe(false);
+		expect(result.notebooks[0]!.subFileCount).toBe(3);
+		// Rows missing the optional field still round-trip (pre-v3.7.3 kernels
+		// omit it).
+		expect(result.notebooks[1]).toEqual({ id: "b2", name: "NB2" });
 	});
 
 	it("listNotebooks throws SiYuanApiError, not TypeError, when data carries no notebooks", async () => {

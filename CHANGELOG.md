@@ -20,6 +20,17 @@
 
 ### Changed
 
+- **Breaking:** `listNotebooks()` now returns the wire-faithful envelope
+  `{ boxDocEnabled, notebooks }` instead of unwrapping and discarding the
+  flag — `boxDocEnabled` is the only way to read a notebook's
+  `subFileCount` (the kernel computes it to 0 whenever the workspace's
+  box-doc setting is off or the notebook is closed). `NotebookInfo` gains
+  typed `subFileCount` with the zero-value caveat: it is meaningful only
+  when `boxDocEnabled` is on and the notebook is open (it is also 0 for an
+  empty or unreadable notebook), and the single-row creates
+  (`createNotebook`/`createEncryptedNotebook`) carry no envelope flag.
+  On kernels older than v3.7.3 both keys are absent from the wire
+  (`undefined` at runtime; falsy = off is the correct reading there).
 - **Breaking:** `query()` dropped its `mode` parameter — the signature is
   now `query(stmt)`. The parameter had exactly one legal value for
   TypeScript callers and the wire body still sends `mode: "readonly"` either

@@ -7,13 +7,35 @@
  * be typed before a consumer demands it.
  */
 
-/** Row of `/api/notebook/lsNotebooks`. `boxDocEnabled` is intentionally not surfaced (no consumer). */
+/** Row of `/api/notebook/lsNotebooks` (and the single-row create envelopes). */
 export type NotebookInfo = {
 	id: string;
 	name: string;
 	encrypted: boolean;
 	unlocked: boolean;
 	closed: boolean;
+	/**
+	 * Top-level doc count. Ships since kernel v3.7.3 (older kernels omit the
+	 * key — `undefined` at runtime); even then it is 0 unless the workspace's
+	 * box-doc setting is on and the notebook is open (see `listNotebooks()`'s
+	 * `boxDocEnabled`), and 0 for an empty or unreadable notebook. Single-row
+	 * returns (createNotebook/createEncryptedNotebook) carry no envelope flag —
+	 * interpret only when the workspace flag is known on.
+	 */
+	subFileCount?: number;
+} & Record<string, unknown>;
+
+/** `data` of `/api/notebook/lsNotebooks`. */
+export type NotebookList = {
+	/**
+	 * Whether the workspace's box-doc setting is on — the gate that makes
+	 * `subFileCount` meaningful. Ships since kernel v3.7.3; older kernels omit
+	 * the key entirely (`undefined` at runtime = off, since box-doc did not
+	 * exist before v3.7.3). Read it with a truthy check, not `=== false`, which
+	 * `undefined` would misread as on.
+	 */
+	boxDocEnabled?: boolean;
+	notebooks: NotebookInfo[];
 } & Record<string, unknown>;
 
 /** Row of `/api/search/fullTextSearchBlock` and `/api/search/listInvalidBlockRefs`. */

@@ -17,6 +17,7 @@ export type {
 	EncryptedNotebookStatus,
 	ExportMarkdownResult,
 	NotebookInfo,
+	NotebookList,
 	SearchBlock,
 	SearchResult,
 } from "./types.js";

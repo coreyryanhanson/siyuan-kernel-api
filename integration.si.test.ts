@@ -15,8 +15,9 @@
  *   3. verified-create contract pin
  *   4. notebook-lifecycle round-trip pin (client-driven, self-cleaning)
  *   5. renameDocByID hPath pin + box-doc failure-path pin (guarded on the
- *      live `boxDocEnabled` flag — with the flag on the same call renames
- *      the notebook, a destructive side effect, so the pin is skipped)
+ *      `boxDocEnabled` envelope flag from listNotebooks — with the flag on
+ *      the same call renames the notebook, a destructive side effect, so
+ *      the pin is skipped)
  *   6. listInvalidBlockRefs round-trip pin (planted orphan, self-cleaning)
  *   7. encrypted-notebook stage-A pins (fixture-free, stateless: typed
  *      status shape, 310 precondition rejection guarded on the live
@@ -306,7 +307,7 @@ describe.skipIf(!CONFIGURED)(
 			);
 			expect(counter.count).toBe(1);
 
-			const notebooks = await client.listNotebooks();
+			const { notebooks } = await client.listNotebooks();
 			expect(Array.isArray(notebooks)).toBe(true);
 		});
 
@@ -368,7 +369,8 @@ describe.skipIf(!CONFIGURED)(
 
 		it("notebook lifecycle: create/rename/close/open/remove round-trip", async () => {
 			// Delta counts only — the shared kernel carries other notebooks.
-			const notebookCount = async () => (await client.listNotebooks()).length;
+			const notebookCount = async () =>
+				(await client.listNotebooks()).notebooks.length;
 			const baseline = await notebookCount();
 
 			// Create through the client, pinning the data.notebook unwrap —
@@ -384,16 +386,16 @@ describe.skipIf(!CONFIGURED)(
 			await expect(
 				client.renameNotebook(created.id, renamed),
 			).resolves.toBeNull();
-			let rows = await client.listNotebooks();
+			let rows = (await client.listNotebooks()).notebooks;
 			expect(rows.find((nb) => nb.id === created.id)?.name).toBe(renamed);
 
 			// Close → open round-trip — the suite's only live assertion of
 			// the `closed` field. Both transitions are synchronous.
 			await expect(client.closeNotebook(created.id)).resolves.toBeNull();
-			rows = await client.listNotebooks();
+			rows = (await client.listNotebooks()).notebooks;
 			expect(rows.find((nb) => nb.id === created.id)?.closed).toBe(true);
 			await expect(client.openNotebook(created.id)).resolves.toBeNull();
-			rows = await client.listNotebooks();
+			rows = (await client.listNotebooks()).notebooks;
 			expect(rows.find((nb) => nb.id === created.id)?.closed).toBe(false);
 
 			// Remove drops the notebook: n → n+1 (create) → n.
@@ -414,15 +416,13 @@ describe.skipIf(!CONFIGURED)(
 				expect(exported.hPath).toBe(`/${renamed}`);
 
 				// Box-doc delegation is feature-gated: read the envelope-level
-				// `boxDocEnabled` flag raw (lsNotebooks envelope field — the typed
-				// listNotebooks discards it). With the flag off (the expected live
-				// state) the box-doc id is unresolvable and hits failure path 2;
-				// with it on, the same call would succeed and RENAME the notebook —
-				// a destructive side effect — so the pin is skipped instead.
-				const lsData = (await envelopeData(
-					await rawPost("/api/notebook/lsNotebooks", {}),
-				)) as { boxDocEnabled?: unknown };
-				if (lsData.boxDocEnabled === true) {
+				// `boxDocEnabled` flag off the typed listNotebooks envelope. With
+				// the flag off (the expected live state) the box-doc id is
+				// unresolvable and hits failure path 2; with it on, the same call
+				// would succeed and RENAME the notebook — a destructive side
+				// effect — so the pin is skipped instead.
+				const { boxDocEnabled } = await client.listNotebooks();
+				if (boxDocEnabled) {
 					console.warn("box-doc enabled — skipping failure-path-2 pin");
 					return;
 				}
@@ -588,7 +588,8 @@ describe.skipIf(!CONFIGURED)(
 				}
 
 				// Delta counts only — the shared kernel carries other notebooks.
-				const notebookCount = async () => (await client.listNotebooks()).length;
+				const notebookCount = async () =>
+					(await client.listNotebooks()).notebooks.length;
 				const baseline = await notebookCount();
 
 				// Create → mounted and unlocked.
@@ -656,7 +657,7 @@ describe.skipIf(!CONFIGURED)(
 				expect(await notebookCount()).toBe(baseline);
 				encryptedBox = "";
 				// The unlock did not disturb the plain fixture: still open.
-				const rows = await client.listNotebooks();
+				const rows = (await client.listNotebooks()).notebooks;
 				expect(rows.find((nb) => nb.id === fixtureABox)?.closed).toBe(false);
 			},
 		);
