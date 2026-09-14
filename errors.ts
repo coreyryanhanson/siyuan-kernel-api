@@ -64,9 +64,13 @@ export class SiYuanRateLimitError extends SiYuanKernelError {
 
 /** An attempt exceeded the per-attempt timeout. */
 export class SiYuanTimeoutError extends SiYuanKernelError {
+	/** The per-attempt budget that elapsed, in ms. */
+	readonly timeoutMs: number;
+
 	constructor(timeoutMs: number) {
 		super(`SiYuan request timed out after ${timeoutMs}ms`);
 		this.name = "SiYuanTimeoutError";
+		this.timeoutMs = timeoutMs;
 	}
 }
 

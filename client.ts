@@ -43,7 +43,7 @@ function isTimeoutError(err: unknown): boolean {
 
 /**
  * Typed client for the SiYuan kernel HTTP API.
- * Zero runtime dependencies, zero pi imports — native fetch only.
+ * Zero runtime dependencies — native fetch only.
  * URL + token are injected by the caller; nothing is hardcoded here.
  * No version constant and no write gate live in this package (extension-owned).
  */
@@ -92,25 +92,12 @@ export class SiYuanKernelClient {
 	 * error, unreachable through this typed signature.
 	 *
 	 * Unwraps `data.notebook` — the kernel returns the full new-notebook row,
-	 * the same shape as an `lsNotebooks` row. The unwrap is guarded: a
-	 * `code: 0` success envelope whose `data` carries no `notebook` field
-	 * (missing or `null`) surfaces as `SiYuanApiError`, never a raw
-	 * `TypeError`.
+	 * the same shape as an `lsNotebooks` row.
 	 */
 	async createNotebook(name: string): Promise<NotebookInfo> {
-		const data = await this.request<{ notebook?: NotebookInfo }>(
-			"/api/notebook/createNotebook",
-			{ name },
-			{ retryable: false },
-		);
-		if (data?.notebook == null) {
-			throw new SiYuanApiError(
-				200,
-				undefined,
-				"envelope data carries no notebook row",
-			);
-		}
-		return data.notebook;
+		return this.createNotebookRow("/api/notebook/createNotebook", {
+			name,
+		});
 	}
 
 	/**
@@ -132,19 +119,10 @@ export class SiYuanKernelClient {
 		name: string,
 		password: string,
 	): Promise<NotebookInfo> {
-		const data = await this.request<{ notebook?: NotebookInfo }>(
-			"/api/notebook/createEncryptedNotebook",
-			{ name, password },
-			{ retryable: false },
-		);
-		if (data?.notebook == null) {
-			throw new SiYuanApiError(
-				200,
-				undefined,
-				"envelope data carries no notebook row",
-			);
-		}
-		return data.notebook;
+		return this.createNotebookRow("/api/notebook/createEncryptedNotebook", {
+			name,
+			password,
+		});
 	}
 
 	/**
@@ -476,11 +454,32 @@ export class SiYuanKernelClient {
 		fromIDs: string[];
 		toID: string;
 	}): Promise<null> {
-		return this.request<null>(
-			"/api/filetree/moveDocsByID",
-			{ fromIDs: params.fromIDs, toID: params.toID },
-			{ retryable: false },
-		);
+		return this.request<null>("/api/filetree/moveDocsByID", params, {
+			retryable: false,
+		});
+	}
+
+	/**
+	 * POST one of the notebook-create routes and unwrap its single `notebook`
+	 * row. A `code: 0` success envelope whose `data` carries no `notebook`
+	 * field (missing or `null`) surfaces as `SiYuanApiError`, never a raw
+	 * `TypeError`.
+	 */
+	private async createNotebookRow(
+		path: string,
+		body: Record<string, unknown>,
+	): Promise<NotebookInfo> {
+		const data = await this.request<{ notebook?: NotebookInfo }>(path, body, {
+			retryable: false,
+		});
+		if (data?.notebook == null) {
+			throw new SiYuanApiError(
+				200,
+				undefined,
+				"envelope data carries no notebook row",
+			);
+		}
+		return data.notebook;
 	}
 
 	/**
@@ -540,7 +539,7 @@ export class SiYuanKernelClient {
 				cancelBody(res);
 				continue;
 			}
-			if (!isOk(res.status)) {
+			if (!res.ok) {
 				cancelBody(res);
 				throw new SiYuanApiError(res.status);
 			}
@@ -599,10 +598,6 @@ function blockWriteBody(
 /** Cancel an abandoned body so it cannot pin the keep-alive connection. */
 function cancelBody(res: Response): void {
 	res.body?.cancel().catch(() => {});
-}
-
-function isOk(status: number): boolean {
-	return status >= 200 && status < 300;
 }
 
 function parseRetryAfter(res: Response): number | undefined {

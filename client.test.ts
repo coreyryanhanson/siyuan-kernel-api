@@ -280,6 +280,7 @@ describe("retry policy", () => {
 		);
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(err).toBeInstanceOf(SiYuanTimeoutError);
+		expect((err as SiYuanTimeoutError).timeoutMs).toBe(30_000);
 	});
 
 	it("throws SiYuanApiError after both read attempts fail with 5xx", async () => {
@@ -725,6 +726,31 @@ describe("endpoint surface", () => {
 			}
 		},
 	);
+
+	it("insertBlock/updateBlock pass through their optional fields when set", async () => {
+		const tx = [{ doOperations: [{ id: "new-block" }], undoOperations: [] }];
+		const { fn, calls } = mockFetch(() => okBody(tx));
+		await client(fn).insertBlock({
+			data: "x",
+			parentID: "p1",
+			nextID: "n1",
+			previousID: "pr1",
+		});
+		await client(fn).updateBlock({ id: "blk", data: "y", lockType: "single" });
+		expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+			data: "x",
+			parentID: "p1",
+			nextID: "n1",
+			previousID: "pr1",
+			dataType: "markdown",
+		});
+		expect(JSON.parse(calls[1]!.init.body as string)).toEqual({
+			id: "blk",
+			data: "y",
+			lockType: "single",
+			dataType: "markdown",
+		});
+	});
 
 	it("deleteBlock sends { id } and returns the transaction array", async () => {
 		const tx = [{ doOperations: [{ id: "blk" }] }];

@@ -17,6 +17,9 @@
   rows; works in read-only workspaces, and a row's `name` is empty for a box
   that is not mounted/unlocked). Locking an encrypted notebook is already
   `closeNotebook(id)`'s job.
+- `SiYuanTimeoutError` now exposes `timeoutMs`, the per-attempt budget that
+  elapsed — symmetric with `SiYuanRateLimitError.retryAfterSeconds`, so
+  callers can log it for the same reason.
 
 ### Changed
 
