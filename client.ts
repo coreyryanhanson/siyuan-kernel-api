@@ -8,6 +8,7 @@ import {
 import type {
 	BlockTransaction,
 	ChildBlock,
+	EncryptedNotebookStatus,
 	ExportMarkdownResult,
 	NotebookInfo,
 	SearchResult,
@@ -107,6 +108,53 @@ export class SiYuanKernelClient {
 	}
 
 	/**
+	 * `/api/notebook/createEncryptedNotebook`. Creates an encrypted notebook
+	 * and returns it mounted and unlocked — the locked state is reached via
+	 * closeNotebook.
+	 *
+	 * Requires workspace encryption to be enabled already; check
+	 * getEncryptedNotebookStatus().enabled first, otherwise the call fails
+	 * with `code: -1` ("Encrypted notebook feature is not enabled"). Names
+	 * beyond 512 runes fail with `code: -1`; an empty name gets the kernel's
+	 * default "untitled" name. The password transits the request body in
+	 * plaintext over HTTP.
+	 *
+	 * On a mount failure the kernel re-locks the box, so the notebook may
+	 * remain created but locked.
+	 */
+	async createEncryptedNotebook(
+		name: string,
+		password: string,
+	): Promise<NotebookInfo> {
+		const data = await this.request<{ notebook?: NotebookInfo }>(
+			"/api/notebook/createEncryptedNotebook",
+			{ name, password },
+			{ retryable: false },
+		);
+		if (data?.notebook === undefined) {
+			throw new SiYuanApiError(200, 0, "envelope data carries no notebook row");
+		}
+		return data.notebook;
+	}
+
+	/**
+	 * `/api/notebook/getEncryptedNotebookStatus` — the encrypted-notebook
+	 * family's state read: whether workspace encryption is enabled (the
+	 * precondition gate for createEncryptedNotebook) and which encrypted
+	 * boxes exist, locked or unlocked. A pure read with no `CheckReadonly`,
+	 * so it works in read-only workspaces. A row's `name` is empty for a box
+	 * that is not mounted/unlocked. The `state` unions are the v3.8.3
+	 * kernel's values.
+	 */
+	async getEncryptedNotebookStatus(): Promise<EncryptedNotebookStatus> {
+		return this.request<EncryptedNotebookStatus>(
+			"/api/notebook/getEncryptedNotebookStatus",
+			{},
+			{ retryable: true },
+		);
+	}
+
+	/**
 	 * `/api/notebook/removeNotebook` — posts the subject as `notebook` (the
 	 * endpoint's real body field). Synchronous: the kernel deletes the
 	 * directory and cleans indexes before responding.
@@ -150,7 +198,8 @@ export class SiYuanKernelClient {
 	 *
 	 * An empty-string id is rejected with `code: -1` ("Field [notebook] must
 	 * not be empty") before the malformed-ID check. Locked encrypted boxes
-	 * fail with a `code: -1` lease error (kernel `Language(314)`).
+	 * fail with a `code: -1` lease error (kernel `Language(314)`); the
+	 * recovery path is unlockAndOpenNotebook.
 	 */
 	async openNotebook(id: string): Promise<null> {
 		return this.request<null>(
@@ -165,12 +214,34 @@ export class SiYuanKernelClient {
 	 * real body field). Unmount cannot fail; the only failure path is a
 	 * malformed id (`code: -1`) — unlike its siblings, the handler does not
 	 * reject an empty string first, it goes straight to the malformed-ID
-	 * check.
+	 * check. On an encrypted notebook it also locks the box — the cached key
+	 * is cleared and the encrypted db closed, so a later openNotebook fails
+	 * with the lease error until unlockAndOpenNotebook.
 	 */
 	async closeNotebook(id: string): Promise<null> {
 		return this.request<null>(
 			"/api/notebook/closeNotebook",
 			{ notebook: id },
+			{ retryable: false },
+		);
+	}
+
+	/**
+	 * `/api/notebook/unlockAndOpenNotebook` — the recovery path for a locked
+	 * encrypted notebook (closeNotebook on an encrypted box produces that
+	 * state). Derives the box key from the master password and unlocks plus
+	 * mounts the box; returns null on success.
+	 *
+	 * A wrong password is rejected with `code: -1` only on a locked box; an
+	 * already-unlocked box re-mounts without re-verifying the password.
+	 * An empty or whitespace-only id or password is rejected with `code: -1`
+	 * before any crypto work. Unlocked boxes auto-lock on idle, so an
+	 * unlock-then-work flow can hit a mid-flow auto-lock.
+	 */
+	async unlockAndOpenNotebook(id: string, password: string): Promise<null> {
+		return this.request<null>(
+			"/api/notebook/unlockAndOpenNotebook",
+			{ notebook: id, password },
 			{ retryable: false },
 		);
 	}
@@ -191,14 +262,17 @@ export class SiYuanKernelClient {
 		return data.notebooks;
 	}
 
-	/** `/api/query/sql` — always sends `mode: "readonly"`; v1 cannot express a writable mode. */
-	async query(
-		stmt: string,
-		mode: "readonly" = "readonly",
-	): Promise<Record<string, unknown>[]> {
+	/**
+	 * `/api/query/sql` — sends `mode: "readonly"` hardcoded: it is the only
+	 * mode the kernel validates for read-only safety (mode "" gets only a
+	 * single-statement check and still permits writes), and the modes without
+	 * that check offer a corruption path that reports success. Readonly
+	 * forever — the block/doc write methods are the write surface.
+	 */
+	async query(stmt: string): Promise<Record<string, unknown>[]> {
 		return this.request<Record<string, unknown>[]>(
 			"/api/query/sql",
-			{ stmt, mode },
+			{ stmt, mode: "readonly" },
 			{ retryable: true },
 		);
 	}

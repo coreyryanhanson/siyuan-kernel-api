@@ -423,6 +423,54 @@ describe("endpoint surface", () => {
 		expect((err as SiYuanApiError).status).toBe(200);
 	});
 
+	it("createEncryptedNotebook posts { name, password } and unwraps data.notebook", async () => {
+		const notebookRow = {
+			id: "nb1",
+			name: "NB",
+			closed: false,
+		};
+		const { fn, calls } = mockFetch(() => okBody({ notebook: notebookRow }));
+		const notebook = await client(fn).createEncryptedNotebook("NB", "pw");
+		expect(calls[0]!.url).toBe(
+			"http://127.0.0.1:6806/api/notebook/createEncryptedNotebook",
+		);
+		expect(calls[0]!.init.body).toBe(
+			JSON.stringify({ name: "NB", password: "pw" }),
+		);
+		expect(notebook).toEqual(notebookRow);
+	});
+
+	it("createEncryptedNotebook throws SiYuanApiError, not TypeError, when data carries no notebook", async () => {
+		// Source-unreachable code 0 / data null envelope: the guarded unwrap
+		// must surface it as a typed error, never an unguarded property chain.
+		const { fn } = mockFetch(() => okBody(null));
+		const err = await client(fn)
+			.createEncryptedNotebook("NB", "pw")
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(SiYuanApiError);
+		expect((err as SiYuanApiError).status).toBe(200);
+	});
+
+	it("getEncryptedNotebookStatus posts an empty body and unwraps the typed status", async () => {
+		const status = {
+			enabled: false,
+			state: "Disabled",
+			count: 0,
+			boxes: [{ id: "nb1", name: "", unlocked: false, state: "Locked" }],
+			migrationPending: false,
+			migrationBoxes: null,
+			hasHistoryDependency: false,
+		};
+		const { fn, calls } = mockFetch(() => okBody(status));
+		const res = await client(fn).getEncryptedNotebookStatus();
+		expect(calls[0]!.url).toBe(
+			"http://127.0.0.1:6806/api/notebook/getEncryptedNotebookStatus",
+		);
+		expect(calls[0]!.init.body).toBe(JSON.stringify({}));
+		expect(res).toEqual(status);
+		expect(res.boxes[0]!.state).toBe("Locked");
+	});
+
 	it.each([
 		[
 			(c: SiYuanKernelClient) => c.removeNotebook("nb1"),
@@ -443,6 +491,11 @@ describe("endpoint surface", () => {
 			(c: SiYuanKernelClient) => c.closeNotebook("nb1"),
 			"/api/notebook/closeNotebook",
 			{ notebook: "nb1" },
+		],
+		[
+			(c: SiYuanKernelClient) => c.unlockAndOpenNotebook("nb1", "pw"),
+			"/api/notebook/unlockAndOpenNotebook",
+			{ notebook: "nb1", password: "pw" },
 		],
 	] as const)(
 		"%s posts the endpoint's real fields and returns null",
@@ -688,7 +741,10 @@ describe("endpoint surface", () => {
 			[(c: SiYuanKernelClient) => c.listInvalidBlockRefs(), 2],
 			[(c: SiYuanKernelClient) => c.exportMarkdown("d1"), 2],
 			[(c: SiYuanKernelClient) => c.getChildBlocks("b1"), 2],
+			[(c: SiYuanKernelClient) => c.getEncryptedNotebookStatus(), 2],
 			[(c: SiYuanKernelClient) => c.createNotebook("NB"), 1],
+			[(c: SiYuanKernelClient) => c.createEncryptedNotebook("NB", "pw"), 1],
+			[(c: SiYuanKernelClient) => c.unlockAndOpenNotebook("nb", "pw"), 1],
 			[(c: SiYuanKernelClient) => c.renameNotebook("nb", "New"), 1],
 			[(c: SiYuanKernelClient) => c.openNotebook("nb"), 1],
 			[(c: SiYuanKernelClient) => c.closeNotebook("nb"), 1],

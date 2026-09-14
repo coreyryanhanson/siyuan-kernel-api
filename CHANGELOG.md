@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Encrypted-notebook endpoints** — `createEncryptedNotebook(name,
+  password)` (the encrypted counterpart of `createNotebook`; requires
+  workspace encryption to already be enabled, and the created notebook comes
+  back mounted and unlocked — a mount failure re-locks the box, so the
+  notebook may remain created but locked), `unlockAndOpenNotebook(id,
+  password)` (the recovery path out of the locked state that makes
+  `openNotebook` fail with the lease error; a wrong password is rejected
+  only on a locked box — an already-unlocked box re-mounts without
+  re-verifying the password), and `getEncryptedNotebookStatus()` (the
+  family's state read: `enabled`, lifecycle `state`, `count`, and per-box
+  rows; works in read-only workspaces, and a row's `name` is empty for a box
+  that is not mounted/unlocked). Locking an encrypted notebook is already
+  `closeNotebook(id)`'s job.
+
+### Changed
+
+- **Breaking:** `query()` dropped its `mode` parameter — the signature is
+  now `query(stmt)`. The parameter had exactly one legal value for
+  TypeScript callers and the wire body still sends `mode: "readonly"` either
+  way, so wire behavior is unchanged; callers that explicitly passed the
+  second argument must drop it. Readonly is now the contract, not the
+  default: `"readonly"` is the only mode the kernel validates for read-only
+  safety, and the unvalidated modes offer a silent-corruption path against
+  the derived SQLite index (raw SQL writes diverge from the source-of-truth
+  `.sy` documents and are reverted by the next reindex or sync, reporting
+  success all the while).
+
 ## [0.2.0] - 2026-09-14
 
 ### Added

@@ -13,6 +13,8 @@ export {
 export type {
 	BlockTransaction,
 	ChildBlock,
+	EncryptedBoxStatus,
+	EncryptedNotebookStatus,
 	ExportMarkdownResult,
 	NotebookInfo,
 	SearchBlock,

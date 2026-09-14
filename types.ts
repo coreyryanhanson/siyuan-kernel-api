@@ -35,6 +35,25 @@ export type SearchResult = {
 	pageCount: number;
 } & Record<string, unknown>;
 
+/** `data` of `/api/notebook/getEncryptedNotebookStatus`. */
+export type EncryptedNotebookStatus = {
+	enabled: boolean;
+	/** Lifecycle states of the workspace's encrypted-notebook feature (v3.8.3 kernel values). */
+	state: "Disabled" | "Enabled" | "RecoveryRequired";
+	count: number;
+	boxes: EncryptedBoxStatus[];
+} & Record<string, unknown>;
+
+/** Row of `EncryptedNotebookStatus.boxes`. */
+export type EncryptedBoxStatus = {
+	id: string;
+	/** Empty unless the box is currently mounted/unlocked — resolve names through `listNotebooks()`. */
+	name: string;
+	unlocked: boolean;
+	/** Per-box lock states (v3.8.3 kernel values). */
+	state: "Locked" | "Unlocking" | "Unlocked" | "Locking" | "Error";
+} & Record<string, unknown>;
+
 /** Row of `/api/block/getChildBlocks`. */
 export type ChildBlock = Record<string, unknown>;
 

@@ -18,7 +18,13 @@
  *      live `boxDocEnabled` flag — with the flag on the same call renames
  *      the notebook, a destructive side effect, so the pin is skipped)
  *   6. listInvalidBlockRefs round-trip pin (planted orphan, self-cleaning)
- *   7. auth-throttle contract pin    (last — arms the lockout)
+ *   7. encrypted-notebook stage-A pins (fixture-free, stateless: typed
+ *      status shape, 310 precondition rejection guarded on the live
+ *      encryption state, 319 rejection for a well-formed unknown id)
+ *   8. encrypted-notebook stage-B round-trip (self-cleaning; needs
+ *      SIYUAN_MASTER_PASSWORD and an encryption-enabled workspace —
+ *      otherwise it self-skips)
+ *   9. auth-throttle contract pin    (last — arms the lockout)
  *
  * The suite opts out of concurrency (`concurrent: false`, this vitest's
  * explicit knob) — a concurrent run would re-arm the throttle mid-suite.
@@ -33,6 +39,24 @@
  *   - a deliberately wrong `boxes` field is ignored: the query degrades to
  *     whole-workspace results (a unique marker outside the path filter was
  *     still returned with `boxes: [nonexistent-id]`)
+ *   - getEncryptedNotebookStatus on the encryption-off workspace returns
+ *     every envelope field: enabled:false / state:"Disabled" / count:0 /
+ *     boxes:[] / migrationPending:false / migrationBoxes:null (null, not
+ *     [], when empty) / hasHistoryDependency:false
+ *   - createEncryptedNotebook {name, password} on the encryption-off
+ *     workspace answers code:-1 "Encrypted notebook feature is not
+ *     enabled" (Language(310)) without touching any state
+ *   - unlockAndOpenNotebook with a well-formed unknown id
+ *     (20240101000000-zzzzzzz) answers code:-1 "Notebook is not encrypted"
+ *     (Language(319)) with lsNotebooks byte-identical before/after
+ *   - on the encryption-enabled workspace, the stage-B round-trip ran live:
+ *     createEncryptedNotebook returns the notebook mounted and unlocked,
+ *     closeNotebook locks it, a wrong password against the locked box
+ *     answers code:-1 "Incorrect master password" (Language(311)) and the
+ *     correct password unlocks it, a plain notebook answers code:-1
+ *     "Notebook is not encrypted" (Language(319)), and removeNotebook
+ *     deletes the encrypted box in the unlocked state (observed through
+ *     the suite, not raw curl)
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -50,6 +74,12 @@ const ENABLED = process.env.SIYUAN_INTEGRATION === "1";
 const CONFIGURED = BASE_URL !== "" && TOKEN !== "" && ENABLED;
 /** Throttle pin locks the host IP out for ~4 min — opt-in within the suite. */
 const THROTTLE_ENABLED = process.env.SIYUAN_INTEGRATION_THROTTLE === "1";
+/**
+ * Stage B round-trip unlocks and locks real encrypted boxes — the master
+ * password is a host-side secret, so the pin is opt-in like the throttle.
+ */
+const MASTER_PASSWORD = process.env.SIYUAN_MASTER_PASSWORD ?? "";
+const STAGE_B_ENABLED = ENABLED && MASTER_PASSWORD !== "";
 
 /** Test constant, not a client constant — the client ships no pinned version. */
 const EXPECTED_VERSION = "3.8.3";
@@ -167,6 +197,9 @@ describe.skipIf(!CONFIGURED)(
 		// Created and removed by the lifecycle case itself; still listed in
 		// teardown so a mid-case failure leaks only as a recoverable stray.
 		let lifecycleBox = "";
+		// Same for the stage-B encrypted fixture. A mid-case failure after the
+		// create leaves it in whatever lock state the case had reached.
+		let encryptedBox = "";
 
 		beforeAll(async () => {
 			client = new SiYuanKernelClient(BASE_URL, TOKEN);
@@ -207,7 +240,12 @@ describe.skipIf(!CONFIGURED)(
 		});
 
 		afterAll(async () => {
-			for (const box of [fixtureABox, fixtureBBox, lifecycleBox]) {
+			for (const box of [
+				fixtureABox,
+				fixtureBBox,
+				lifecycleBox,
+				encryptedBox,
+			]) {
 				if (box === "") continue;
 				try {
 					await envelopeData(
@@ -458,6 +496,168 @@ describe.skipIf(!CONFIGURED)(
 					(r) => !mentionsHolder(r),
 				);
 				expect(mentionsHolder(cleared)).toBe(false);
+			},
+		);
+
+		it("encrypted status: typed envelope shape (fixture-free, stateless)", async () => {
+			// Shape only — never the workspace's actual values beyond the
+			// guard reads — so the pin survives encryption being enabled
+			// later. The per-box loop only executes when the workspace
+			// already carries encrypted boxes; on a boxless one the row
+			// shape is pinned by the stage-B round-trip instead. The kernel
+			// provably always sets every field, but the passthrough fields
+			// (migrationPending/migrationBoxes/
+			// hasHistoryDependency) are deliberately not asserted here.
+			const status = await client.getEncryptedNotebookStatus();
+			expect(typeof status.enabled).toBe("boolean");
+			expect(["Disabled", "Enabled", "RecoveryRequired"]).toContain(
+				status.state,
+			);
+			expect(typeof status.count).toBe("number");
+			expect(Array.isArray(status.boxes)).toBe(true);
+			for (const row of status.boxes) {
+				expect(typeof row.id).toBe("string");
+				expect(typeof row.name).toBe("string");
+				expect(typeof row.unlocked).toBe("boolean");
+				expect([
+					"Locked",
+					"Unlocking",
+					"Unlocked",
+					"Locking",
+					"Error",
+				]).toContain(row.state);
+			}
+		});
+
+		it("createEncryptedNotebook: precondition rejection on an encryption-off workspace", async (ctx) => {
+			// Guard stays typed: the live workspace state is read through
+			// getEncryptedNotebookStatus, not a raw envelope beside it.
+			const status = await client.getEncryptedNotebookStatus();
+			if (status.enabled) {
+				// On an enabled workspace the same call would create a real
+				// notebook; the client-side behavior (body shape, code:-1
+				// surfacing as SiYuanApiError) is pinned by unit tests, so
+				// 310 is kernel deployment state, not client logic.
+				ctx.skip();
+				return;
+			}
+			const failure = await client
+				.createEncryptedNotebook(`pi-kb-enc-${ts}`, "x")
+				.then(
+					() => null,
+					(err: unknown) => err,
+				);
+			expect(failure).toBeInstanceOf(SiYuanApiError);
+			expect((failure as SiYuanApiError).code).toBe(-1);
+		});
+
+		it("unlockAndOpenNotebook: well-formed unknown id rejects before any state change", async () => {
+			// The id matches the kernel's node-ID pattern (14 digits + 7
+			// lowercase alphanumerics) but exists nowhere: Language(319)
+			// fires before any crypto or state change — lsNotebooks is
+			// byte-identical before/after (observed live @ 3.8.3). A
+			// malformed id would fail earlier with "invalid ID argument"
+			// instead, and a real encrypted-box id would fail later with
+			// 311/316 — both are different pins.
+			const failure = await client
+				.unlockAndOpenNotebook("20240101000000-zzzzzzz", "x")
+				.then(
+					() => null,
+					(err: unknown) => err,
+				);
+			expect(failure).toBeInstanceOf(SiYuanApiError);
+			expect((failure as SiYuanApiError).code).toBe(-1);
+		});
+
+		it.skipIf(!STAGE_B_ENABLED)(
+			"encrypted lifecycle: create/close/unlock round-trip (self-cleaning)",
+			// Argon2id KEK derivation costs ~1 s per unlock call.
+			{ timeout: 60_000 },
+			async (ctx) => {
+				// Stage B needs an encryption-enabled workspace — the master
+				// password alone is not enough; enabling is a host deployment
+				// action. On an off workspace the round-trip would only hit the
+				// 310 rejection already pinned in stage A, so skip.
+				const status = await client.getEncryptedNotebookStatus();
+				if (!status.enabled) {
+					console.warn(
+						"workspace encryption disabled — skipping stage-B round-trip",
+					);
+					ctx.skip();
+					return;
+				}
+
+				// Delta counts only — the shared kernel carries other notebooks.
+				const notebookCount = async () => (await client.listNotebooks()).length;
+				const baseline = await notebookCount();
+
+				// Create → mounted and unlocked.
+				const name = `pi-kb-enc-${ts}`;
+				const created = await client.createEncryptedNotebook(
+					name,
+					MASTER_PASSWORD,
+				);
+				expect(created.id).toBeTruthy();
+				expect(created.name).toBe(name);
+				encryptedBox = created.id;
+
+				// closeNotebook on an encrypted box locks it — the same locked
+				// state the kernel's lock-notebook route reaches.
+				await expect(client.closeNotebook(created.id)).resolves.toBeNull();
+
+				// Locked box, status row: locked, name empty — the kernel fills
+				// the row's name from opened boxes only.
+				const lockedStatus = await client.getEncryptedNotebookStatus();
+				const lockedRow = lockedStatus.boxes.find((b) => b.id === created.id);
+				expect(lockedRow?.unlocked).toBe(false);
+				expect(lockedRow?.state).toBe("Locked");
+				expect(lockedRow?.name).toBe("");
+
+				// Wrong password on a LOCKED box is rejected (code-only — never
+				// the localized msg). Only meaningful locked: an already-unlocked
+				// box never re-verifies the password.
+				const wrong = await client
+					.unlockAndOpenNotebook(created.id, `wrong-${ts}`)
+					.then(
+						() => null,
+						(err: unknown) => err,
+					);
+				expect(wrong).toBeInstanceOf(SiYuanApiError);
+				expect((wrong as SiYuanApiError).code).toBe(-1);
+
+				// Correct password unlocks and mounts the box again; the status
+				// row now reports unlocked with the box's name filled in.
+				await expect(
+					client.unlockAndOpenNotebook(created.id, MASTER_PASSWORD),
+				).resolves.toBeNull();
+				const unlockedStatus = await client.getEncryptedNotebookStatus();
+				const unlockedRow = unlockedStatus.boxes.find(
+					(b) => b.id === created.id,
+				);
+				expect(unlockedRow?.unlocked).toBe(true);
+				expect(unlockedRow?.state).toBe("Unlocked");
+				expect(unlockedRow?.name).toBe(name);
+
+				// While an encrypted box exists: the plain-notebook rejection.
+				// fixtureABox is a real plain notebook, live at this point in the
+				// ordered suite.
+				const plain = await client
+					.unlockAndOpenNotebook(fixtureABox, MASTER_PASSWORD)
+					.then(
+						() => null,
+						(err: unknown) => err,
+					);
+				expect(plain).toBeInstanceOf(SiYuanApiError);
+				expect((plain as SiYuanApiError).code).toBe(-1);
+
+				// Teardown through the shipped method: removeNotebook works on
+				// encrypted boxes in either lock state.
+				await expect(client.removeNotebook(created.id)).resolves.toBeNull();
+				expect(await notebookCount()).toBe(baseline);
+				encryptedBox = "";
+				// The unlock did not disturb the plain fixture: still open.
+				const rows = await client.listNotebooks();
+				expect(rows.find((nb) => nb.id === fixtureABox)?.closed).toBe(false);
 			},
 		);
 

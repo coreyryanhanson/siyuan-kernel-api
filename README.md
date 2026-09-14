@@ -30,7 +30,7 @@ const rows = await client.query(
 
 const result = await client.search({
  query: "docker networking",
- paths: [notebooks[0]?.id ?? ""],
+ paths: [],
  pageSize: 64,
 });
 
@@ -45,12 +45,15 @@ const children = await client.getChildBlocks("<block-id>");
 | `getVersion()` | `/api/system/version` | Raw version string |
 | `listNotebooks()` | `/api/notebook/lsNotebooks` | Unwraps `data.notebooks` |
 | `createNotebook(name)` | `/api/notebook/createNotebook` | Returns the new notebook row (`id`, `closed`, …); an empty/whitespace name gets the kernel's default name |
+| `createEncryptedNotebook(name, password)` | `/api/notebook/createEncryptedNotebook` | The encrypted counterpart of `createNotebook`: returns the new notebook row, mounted and unlocked. Requires workspace encryption to already be enabled — check `getEncryptedNotebookStatus()` first. The password transits plaintext over HTTP |
 | `removeNotebook(id)` | `/api/notebook/removeNotebook` | Posts the id as `notebook`; a well-formed but unknown id is a silent success |
 | `renameNotebook(id, name)` | `/api/notebook/renameNotebook` | Posts the id as `notebook` |
 | `openNotebook(id)` | `/api/notebook/openNotebook` | Posts the id as `notebook`; the recovery path for writes into a notebook closed in the UI |
-| `closeNotebook(id)` | `/api/notebook/closeNotebook` | Posts the id as `notebook` |
-| `query(stmt, mode)` | `/api/query/sql` | `mode` is always `"readonly"` |
-| `search({query, paths, page?, pageSize?})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply); kernel-default pagination 1/32, 1-based `page` |
+| `closeNotebook(id)` | `/api/notebook/closeNotebook` | Posts the id as `notebook`. On an encrypted notebook it also locks the box, so a later `openNotebook` fails with the lease error until `unlockAndOpenNotebook` |
+| `unlockAndOpenNotebook(id, password)` | `/api/notebook/unlockAndOpenNotebook` | The encrypted counterpart of `openNotebook`: the recovery path out of the locked state that makes `openNotebook` fail with the lease error. Unlocked boxes auto-lock on idle |
+| `query(stmt)` | `/api/query/sql` | Readonly only: the kernel validates `"readonly"` for read-only safety; the unvalidated modes are a silent-corruption path on a derived index |
+| `getEncryptedNotebookStatus()` | `/api/notebook/getEncryptedNotebookStatus` | The encrypted family's state read (works in read-only workspaces). A row's `name` is empty for a box that is not mounted/unlocked |
+| `search({query, paths, page?, pageSize?})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply); kernel-default pagination 1/32, 1-based `page`. A `paths` entry is `boxId` or `boxId/hPath`; invalid entries are dropped silently |
 | `exportMarkdown(id)` | `/api/export/exportMdContent` | Doc as GFM markdown |
 | `getChildBlocks(id)` | `/api/block/getChildBlocks` | Children in document order |
 | `createDocWithMarkdown({notebook, path, markdown, parentID?, tags?})` | `/api/filetree/createDocWithMd` | Returns the new doc's ID |
@@ -65,6 +68,8 @@ const children = await client.getChildBlocks("<block-id>");
 | `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; resolves `null` for a page past the kernel's range, an empty page at the exact-multiple boundary |
 
 All requests are `POST` with JSON bodies. Content writes always send `dataType: "markdown"`, since the endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing.
+
+The encrypted-notebook family is a lifecycle subset: `search()` and `query()` are not box-scoped and read the global plaintext index, so a created encrypted notebook is reachable by id-based reads once unlocked, not by those two.
 
 ## Error handling
 
@@ -97,7 +102,16 @@ Retry policy, built in:
 
 ## Scope notes
 
-- **Documented endpoints only, three named exceptions**: `/api/search/fullTextSearchBlock` (absent from SiYuan's API.md, but backed by the same kernel function SiYuan's own MCP server exposes), `/api/search/listInvalidBlockRefs`, and the `mode: "readonly"` flag on `/api/query/sql` (kernel-enforced `sqlite3_stmt_readonly` check). All are pinned by integration tests.
+- **Documented endpoints only, six named exceptions** — five routes absent from SiYuan's API references (the kernel repo's `docs/ENCRYPTED-NOTEBOOK.md` documents the encrypted family's backup pair, so they are not absent from upstream docs entirely), plus the `mode: "readonly"` flag on the documented `/api/query/sql` (kernel-enforced `sqlite3_stmt_readonly` check):
+  - `/api/search/fullTextSearchBlock` — backed by the same kernel function SiYuan's own MCP server exposes.
+  - `/api/search/listInvalidBlockRefs`.
+  - `/api/notebook/createEncryptedNotebook` — the per-run encrypted fixture lifecycle (create → `closeNotebook` → unlock → remove).
+  - `/api/notebook/unlockAndOpenNotebook` — the recovery path out of the locked-box states the lifecycle doc comments describe.
+  - `/api/notebook/getEncryptedNotebookStatus` — the precondition gate for `createEncryptedNotebook` (`enabled`) and the recovery-flow read for which encrypted boxes exist and which are locked.
+
+  The three encrypted routes require a kernel that ships them: on an older kernel the call surfaces as `SiYuanApiError`, with no promised transport shape.
+
+  All are pinned by integration tests.
 - The search method hardcodes `method: 0` (keyword). The route also accepts `method: 2` (SQL search), which is an admin-only capability; not exposing it keeps raw SQL reachable only through `query()`.
 - `getVersion()` fetches and returns the version string; it holds no pinned constant and enforces nothing.
 - Types cover only the fields these methods consume; unknown fields pass through via `Record<string, unknown>` intersections.
