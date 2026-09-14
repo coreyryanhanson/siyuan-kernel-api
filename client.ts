@@ -92,8 +92,9 @@ export class SiYuanKernelClient {
 	 *
 	 * Unwraps `data.notebook` — the kernel returns the full new-notebook row,
 	 * the same shape as an `lsNotebooks` row. The unwrap is guarded: a
-	 * source-unreachable `code: 0` / `data: null` envelope surfaces as
-	 * `SiYuanApiError`, never a raw `TypeError`.
+	 * `code: 0` success envelope whose `data` carries no `notebook` field
+	 * (missing or `null`) surfaces as `SiYuanApiError`, never a raw
+	 * `TypeError`.
 	 */
 	async createNotebook(name: string): Promise<NotebookInfo> {
 		const data = await this.request<{ notebook?: NotebookInfo }>(
@@ -101,8 +102,12 @@ export class SiYuanKernelClient {
 			{ name },
 			{ retryable: false },
 		);
-		if (data?.notebook === undefined) {
-			throw new SiYuanApiError(200, 0, "envelope data carries no notebook row");
+		if (data?.notebook == null) {
+			throw new SiYuanApiError(
+				200,
+				undefined,
+				"envelope data carries no notebook row",
+			);
 		}
 		return data.notebook;
 	}
@@ -131,8 +136,12 @@ export class SiYuanKernelClient {
 			{ name, password },
 			{ retryable: false },
 		);
-		if (data?.notebook === undefined) {
-			throw new SiYuanApiError(200, 0, "envelope data carries no notebook row");
+		if (data?.notebook == null) {
+			throw new SiYuanApiError(
+				200,
+				undefined,
+				"envelope data carries no notebook row",
+			);
 		}
 		return data.notebook;
 	}
@@ -248,16 +257,20 @@ export class SiYuanKernelClient {
 
 	/**
 	 * `/api/notebook/lsNotebooks` — unwraps `data.notebooks`. The unwrap is
-	 * guarded: a source-unreachable `code: 0` / `data: null` envelope
-	 * surfaces as `SiYuanApiError`, never a raw `TypeError` (same as
-	 * createNotebook).
+	 * guarded: a `code: 0` success envelope whose `data` carries no
+	 * `notebooks` field (missing or `null`) surfaces as `SiYuanApiError`,
+	 * never a raw `TypeError` (same as createNotebook).
 	 */
 	async listNotebooks(): Promise<NotebookInfo[]> {
 		const data = await this.request<{
 			notebooks?: NotebookInfo[];
 		}>("/api/notebook/lsNotebooks", {}, { retryable: true });
-		if (data?.notebooks === undefined) {
-			throw new SiYuanApiError(200, 0, "envelope data carries no notebooks");
+		if (data?.notebooks == null) {
+			throw new SiYuanApiError(
+				200,
+				undefined,
+				"envelope data carries no notebooks",
+			);
 		}
 		return data.notebooks;
 	}
@@ -267,14 +280,17 @@ export class SiYuanKernelClient {
 	 * mode the kernel validates for read-only safety (mode "" gets only a
 	 * single-statement check and still permits writes), and the modes without
 	 * that check offer a corruption path that reports success. Readonly
-	 * forever — the block/doc write methods are the write surface.
+	 * forever — the block/doc write methods are the write surface. A
+	 * `code: 0` / `data: null` envelope is normalized to `[]` so a nil result
+	 * can never surface as `null` against the non-nullable signature.
 	 */
 	async query(stmt: string): Promise<Record<string, unknown>[]> {
-		return this.request<Record<string, unknown>[]>(
+		const data = await this.request<Record<string, unknown>[] | null>(
 			"/api/query/sql",
 			{ stmt, mode: "readonly" },
 			{ retryable: true },
 		);
+		return data ?? [];
 	}
 
 	/**

@@ -30,6 +30,24 @@
   the derived SQLite index (raw SQL writes diverge from the source-of-truth
   `.sy` documents and are reverted by the next reindex or sync, reporting
   success all the while).
+- Guarded-unwrap failures in `listNotebooks()`, `createNotebook()`, and
+  `createEncryptedNotebook()` throw `SiYuanApiError` with `code: undefined`
+  instead of the misleading `code: 0` — the kernel *did* report success
+  there; the failure was client-side, so a handler branching on
+  `err.code === 0` routed it into the success/soft path. Breaking only for
+  callers that match `err.code === 0` on these errors. The guards now also
+  catch a nested JSON `null` field (not just a missing one). As part of the
+  same change, `SiYuanApiError`'s message includes its `msg` text even when
+  `code` is `undefined` (previously such errors dropped the diagnostic
+  text); the only messages that change shape are the three guarded-unwrap
+  errors themselves, which drop `, code 0` while keeping their `msg`.
+
+### Fixed
+
+- `query()` resolves `[]` instead of `null` when the kernel flushes a
+  `code: 0` / `data: null` success envelope, so a nil result can no longer
+  surface as `null` against the non-nullable array signature (a latent
+  `TypeError` at the call site).
 
 ## [0.2.0] - 2026-09-14
 

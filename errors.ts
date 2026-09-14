@@ -13,19 +13,18 @@ export class SiYuanKernelError extends Error {
 	}
 }
 
-/** Non-2xx status the kernel did not classify more specifically, or a 2xx whose body is not a gulu envelope (`code`/`msg` absent or `code !== 0`). */
+/** Non-2xx status the kernel did not classify more specifically, a 2xx whose body is not a gulu envelope (`code`/`msg` absent or `code !== 0`), or a 2xx success envelope whose guarded unwrap failed (a promised `data` field is missing or `null`). */
 export class SiYuanApiError extends SiYuanKernelError {
 	readonly status: number;
-	/** Envelope `code`; undefined when the body carried no parseable envelope. */
+	/** Envelope `code`; undefined when the body carried no parseable envelope or when a guarded unwrap failed on a success envelope. Discriminator at `status: 200` / `code: undefined`: the client's own `msg` text means a guarded unwrap failed, no `msg` means the body was not a parseable envelope. */
 	readonly code?: number;
 	/** Envelope `msg`, or the client's own text when a guarded unwrap failed (the kernel sends no `msg` there); undefined when the body carried no parseable envelope. */
 	readonly msg?: string;
 
 	constructor(status: number, code?: number, msg?: string) {
-		const detail =
-			code === undefined
-				? `HTTP ${status}`
-				: `HTTP ${status}, code ${code}${msg ? `: ${msg}` : ""}`;
+		const detail = `HTTP ${status}${
+			code === undefined ? "" : `, code ${code}`
+		}${msg ? `: ${msg}` : ""}`;
 		super(`SiYuan API error (${detail})`);
 		this.name = "SiYuanApiError";
 		this.status = status;

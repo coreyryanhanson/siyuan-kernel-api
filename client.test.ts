@@ -387,14 +387,28 @@ describe("endpoint surface", () => {
 	});
 
 	it("listNotebooks throws SiYuanApiError, not TypeError, when data carries no notebooks", async () => {
-		// Source-unreachable code 0 / data null envelope: the guarded unwrap
-		// must surface it as a typed error, never an unguarded property chain.
+		// The guarded unwrap treats a missing or null `notebooks` field on a
+		// code 0 success envelope as failure, surfacing it as a typed error,
+		// never an unguarded property chain.
 		const { fn } = mockFetch(() => okBody(null));
 		const err = await client(fn)
 			.listNotebooks()
 			.catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(SiYuanApiError);
 		expect((err as SiYuanApiError).status).toBe(200);
+		expect((err as SiYuanApiError).code).toBeUndefined();
+		expect((err as SiYuanApiError).msg).toBe(
+			"envelope data carries no notebooks",
+		);
+		expect((err as SiYuanApiError).message).toContain(
+			"envelope data carries no notebooks",
+		);
+		// A nested null field is caught by the same guard.
+		const { fn: fnNull } = mockFetch(() => okBody({ notebooks: null }));
+		const errNull = await client(fnNull)
+			.listNotebooks()
+			.catch((e: unknown) => e);
+		expect(errNull).toBeInstanceOf(SiYuanApiError);
 	});
 
 	it("createNotebook posts { name } and unwraps data.notebook", async () => {
@@ -410,17 +424,6 @@ describe("endpoint surface", () => {
 		);
 		expect(calls[0]!.init.body).toBe(JSON.stringify({ name: "NB" }));
 		expect(notebook).toEqual(notebookRow);
-	});
-
-	it("createNotebook throws SiYuanApiError, not TypeError, when data carries no notebook", async () => {
-		// Source-unreachable code 0 / data null envelope: the guarded unwrap
-		// must surface it as a typed error, never an unguarded property chain.
-		const { fn } = mockFetch(() => okBody(null));
-		const err = await client(fn)
-			.createNotebook("NB")
-			.catch((e: unknown) => e);
-		expect(err).toBeInstanceOf(SiYuanApiError);
-		expect((err as SiYuanApiError).status).toBe(200);
 	});
 
 	it("createEncryptedNotebook posts { name, password } and unwraps data.notebook", async () => {
@@ -440,16 +443,35 @@ describe("endpoint surface", () => {
 		expect(notebook).toEqual(notebookRow);
 	});
 
-	it("createEncryptedNotebook throws SiYuanApiError, not TypeError, when data carries no notebook", async () => {
-		// Source-unreachable code 0 / data null envelope: the guarded unwrap
-		// must surface it as a typed error, never an unguarded property chain.
-		const { fn } = mockFetch(() => okBody(null));
-		const err = await client(fn)
-			.createEncryptedNotebook("NB", "pw")
-			.catch((e: unknown) => e);
-		expect(err).toBeInstanceOf(SiYuanApiError);
-		expect((err as SiYuanApiError).status).toBe(200);
-	});
+	it.each([
+		["createNotebook", (c: SiYuanKernelClient) => c.createNotebook("NB")],
+		[
+			"createEncryptedNotebook",
+			(c: SiYuanKernelClient) => c.createEncryptedNotebook("NB", "pw"),
+		],
+	] as const)(
+		"%s throws SiYuanApiError, not TypeError, when data carries no notebook",
+		async (_method, call) => {
+			// The guarded unwrap treats a missing or null `notebook` field on a
+			// code 0 success envelope as failure, surfacing it as a typed error,
+			// never an unguarded property chain.
+			const { fn } = mockFetch(() => okBody(null));
+			const err = await call(client(fn)).catch((e: unknown) => e);
+			expect(err).toBeInstanceOf(SiYuanApiError);
+			expect((err as SiYuanApiError).status).toBe(200);
+			expect((err as SiYuanApiError).code).toBeUndefined();
+			expect((err as SiYuanApiError).msg).toBe(
+				"envelope data carries no notebook row",
+			);
+			expect((err as SiYuanApiError).message).toContain(
+				"envelope data carries no notebook row",
+			);
+			// A nested null field is caught by the same guard.
+			const { fn: fnNull } = mockFetch(() => okBody({ notebook: null }));
+			const errNull = await call(client(fnNull)).catch((e: unknown) => e);
+			expect(errNull).toBeInstanceOf(SiYuanApiError);
+		},
+	);
 
 	it("getEncryptedNotebookStatus posts an empty body and unwraps the typed status", async () => {
 		const status = {
@@ -515,6 +537,11 @@ describe("endpoint surface", () => {
 			JSON.stringify({ stmt: "SELECT 1", mode: "readonly" }),
 		);
 		expect(rows).toEqual([{ id: "r1" }]);
+	});
+
+	it("query normalizes a kernel null on the success envelope to []", async () => {
+		const { fn } = mockFetch(() => okBody(null));
+		await expect(client(fn).query("SELECT 1")).resolves.toEqual([]);
 	});
 
 	it("search omits unset page/pageSize but keeps method: 0", async () => {

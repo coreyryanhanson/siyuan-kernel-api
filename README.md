@@ -92,7 +92,7 @@ import {
 | `SiYuanRateLimitError` | HTTP 429 from the kernel's per-IP auth throttle. Carries `retryAfterSeconds` (from `Retry-After`). A 429 can arrive with a *correct* token because the lock is per-IP, so it is a sibling of `SiYuanAuthError`, never a subclass. |
 | `SiYuanTimeoutError` | An attempt exceeded the 30 s timeout |
 | `SiYuanNetworkError` | `fetch` itself rejected (DNS, connection refused, …) |
-| `SiYuanApiError` | Any other non-2xx, or a 2xx whose body is not a `code`/`msg`/`data` envelope with `code === 0`. Carries `status`, and `code`/`msg` when the envelope parsed. |
+| `SiYuanApiError` | Any other non-2xx; a 2xx whose body is not a `code`/`msg`/`data` envelope with `code === 0`; or a 2xx success envelope whose guarded unwrap failed. Carries `status`; `code`/`msg` from a rejecting envelope, or the client's own `msg` with `code: undefined` when a guarded unwrap failed. |
 
 Retry policy, built in:
 
