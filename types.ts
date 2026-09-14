@@ -2,7 +2,9 @@
  * Exported surface types for SiYuanKernelClient.
  * Breadth policy: type only the fields the extension consumes and pass unknown
  * fields through via a `Record<string, unknown>` intersection — no full Go
- * model transcription. Widen when a consumer needs more, not before.
+ * model transcription. Widen when a consumer needs more, not before. Exception:
+ * fields the kernel provably always sets on every endpoint a type serves may
+ * be typed before a consumer demands it.
  */
 
 /** Row of `/api/notebook/lsNotebooks`. `boxDocEnabled` is intentionally not surfaced (no consumer). */
@@ -14,16 +16,18 @@ export type NotebookInfo = {
 	closed: boolean;
 } & Record<string, unknown>;
 
-/** Row of `/api/search/fullTextSearchBlock`. */
+/** Row of `/api/search/fullTextSearchBlock` and `/api/search/listInvalidBlockRefs`. */
 export type SearchBlock = {
 	id: string;
 	rootID: string;
 	box: string;
 	hPath: string;
 	updated: string;
+	/** Always set by the kernel (the row is a full model.Block with no omitempty). */
+	content: string;
 } & Record<string, unknown>;
 
-/** `data` of `/api/search/fullTextSearchBlock` (§3's fan-out merge reads the counts). */
+/** `data` of `/api/search/fullTextSearchBlock` and `/api/search/listInvalidBlockRefs` (the counts feed caller-side fan-out merges). */
 export type SearchResult = {
 	blocks: SearchBlock[];
 	matchedBlockCount: number;
@@ -38,7 +42,7 @@ export type ChildBlock = Record<string, unknown>;
 export type ExportMarkdownResult = {
 	hPath: string;
 	content: string;
-};
+} & Record<string, unknown>;
 
 /**
  * `data` of the block-write endpoints (insert/append/update/delete). The

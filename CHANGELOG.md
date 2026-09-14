@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Notebook lifecycle and doc-rename endpoints** — `createNotebook(name)`
+  (returns the new notebook row, symmetric with `listNotebooks()`),
+  `removeNotebook(id)`, `renameNotebook(id, name)`, `openNotebook(id)` /
+  `closeNotebook(id)` (the recovery path for writing into a notebook closed
+  in the UI, which fails kernel-side with `ErrBoxClosed`), and
+  `renameDocByID(id, title)` (updates the hpath's last segment; renaming the
+  box doc renames the notebook when box-doc is enabled). An empty or
+  whitespace-only name gets the kernel's default "untitled" name. Also
+  `listInvalidBlockRefs({page?, pageSize?})`, the only detection route for
+  block references orphaned by `removeDocByID`/`deleteBlock`: a paginated
+  read (kernel defaults 1/32, `page` is 1-based) that resolves `null` for a
+  page past the kernel's range and an empty page at the exact-multiple
+  boundary.
+
+### Changed
+
+- **Breaking:** `SearchBlock` gained a required `content: string` field; the
+  kernel always sets it. Only consumers that construct `SearchBlock` literals
+  (test fixtures, mocks) are affected.
+- `search()` accepts optional `page` and `pageSize` (kernel defaults 1/32;
+  `page` is 1-based). 0.1.0 required `pageSize` and never sent `page`, so
+  every search was silently page 1 and `pageCount` pages ≥ 2 were
+  unreachable through the typed client.
+
+### Fixed
+
+- `listNotebooks()` and `createNotebook()` throw a typed `SiYuanApiError`
+  instead of a raw `TypeError` if the kernel returns a `code: 0` /
+  `data: null` envelope, so every error extends `SiYuanKernelError`.
+- A response body that stalls past the 30 s timeout now surfaces as
+  `SiYuanTimeoutError` (retried once on reads) instead of `SiYuanApiError`.
+
 ## [0.1.0] - 2026-09-12
 
 ### Added

@@ -32,7 +32,9 @@ Run one test file: `npx vitest run client.test.ts`. CI (Node 22) runs lint, fmt:
 - Retry policy: never retry 401/403/429 (bad-token retries lock the IP out); single retry for network/timeout/5xx on reads only; writes are never retried; hard 30 s timeout per attempt.
 - Content writes always send `dataType: "markdown"` — the kernel endpoints silently no-op (`code: 0`, `data: null`) without it.
 - `search()` hardcodes `method: 0`; `method: 2` (SQL search) is admin-only and deliberately not exposed — raw SQL goes through `query()` only.
-- Two endpoints are undocumented upstream but pinned by integration tests: `/api/search/fullTextSearchBlock` and `mode: "readonly"` on `/api/query/sql`. Don't remove those tests.
+- **Subject-`id` naming rule.** The *subject* of an operation is always the method's `id` parameter (as in `removeDocByID(id)`, `renameNotebook(id, …)`); params that scope an operation keep their kernel body field names (as in `createDocWithMarkdown({ notebook, … })`); display-name params stay domain-faithful — a notebook takes `name`, a doc takes `title`.
+- **Deferred endpoints** (revisit on first consumer demand): `createEncryptedNotebook`/`lockNotebook` need workspace-level key-domain setup outside any single call, so a typed method would read as safe while the prerequisite lives one layer down; `getNotebookConf`/`setNotebookConf` and `changeSortNotebook`/`reorderNotebooks`/`setNotebookIcon`/`getNotebookInfo` are purely additive later and none conflicts with a planned signature; `boxDocEnabled` sits on the `lsNotebooks` envelope, not on notebook rows, so surfacing it means changing `listNotebooks`'s return shape, not widening a row type.
+- Three endpoints are undocumented upstream but pinned by integration tests: `/api/search/fullTextSearchBlock`, `/api/search/listInvalidBlockRefs`, and `mode: "readonly"` on `/api/query/sql`. Don't remove those tests.
 
 ## Releases
 

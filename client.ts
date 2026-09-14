@@ -79,11 +79,115 @@ export class SiYuanKernelClient {
 		return this.request<string>("/api/system/version", {}, { retryable: true });
 	}
 
-	/** `/api/notebook/lsNotebooks` — unwraps `data.notebooks`. */
+	// Shared write-route note (applies to every write method below, and to the
+	// filetree/doc writes): these routes carry `CheckAdminRole` and are blocked
+	// in read-only workspaces by the `CheckReadonly` middleware (`code: -1`).
+
+	/**
+	 * `/api/notebook/createNotebook`. An empty or whitespace-only name is not
+	 * an error — the kernel substitutes its default "untitled" name (names
+	 * beyond 512 runes fail with `code: -1`); a missing `name` field is a hard
+	 * error, unreachable through this typed signature.
+	 *
+	 * Unwraps `data.notebook` — the kernel returns the full new-notebook row,
+	 * the same shape as an `lsNotebooks` row. The unwrap is guarded: a
+	 * source-unreachable `code: 0` / `data: null` envelope surfaces as
+	 * `SiYuanApiError`, never a raw `TypeError`.
+	 */
+	async createNotebook(name: string): Promise<NotebookInfo> {
+		const data = await this.request<{ notebook?: NotebookInfo }>(
+			"/api/notebook/createNotebook",
+			{ name },
+			{ retryable: false },
+		);
+		if (data?.notebook === undefined) {
+			throw new SiYuanApiError(200, 0, "envelope data carries no notebook row");
+		}
+		return data.notebook;
+	}
+
+	/**
+	 * `/api/notebook/removeNotebook` — posts the subject as `notebook` (the
+	 * endpoint's real body field). Synchronous: the kernel deletes the
+	 * directory and cleans indexes before responding.
+	 *
+	 * An empty-string id is rejected with `code: -1` ("Field [notebook] must
+	 * not be empty") before the malformed-ID check. A well-formed but unknown
+	 * id is a silent success (`code: 0` / `data: null`) — the kernel gives no
+	 * signal to distinguish it from an existing notebook, and neither does
+	 * this method.
+	 */
+	async removeNotebook(id: string): Promise<null> {
+		return this.request<null>(
+			"/api/notebook/removeNotebook",
+			{ notebook: id },
+			{ retryable: false },
+		);
+	}
+
+	/**
+	 * `/api/notebook/renameNotebook` — posts as `notebook` plus the new
+	 * `name`. An empty or whitespace-only name is silently substituted with
+	 * the kernel's default "untitled" name (same as createNotebook).
+	 *
+	 * An empty-string id is rejected with `code: -1` before the malformed-ID
+	 * check (same as removeNotebook). Locked encrypted boxes fail with a
+	 * `code: -1` lease error (kernel `Language(314)`).
+	 */
+	async renameNotebook(id: string, name: string): Promise<null> {
+		return this.request<null>(
+			"/api/notebook/renameNotebook",
+			{ notebook: id, name },
+			{ retryable: false },
+		);
+	}
+
+	/**
+	 * `/api/notebook/openNotebook` — posts the subject as `notebook` (the
+	 * endpoint's real body field). Re-mounts a closed notebook, the recovery
+	 * path for doc writes that would otherwise fail with `ErrBoxClosed`.
+	 * Synchronous: the kernel completes the mount before responding.
+	 *
+	 * An empty-string id is rejected with `code: -1` ("Field [notebook] must
+	 * not be empty") before the malformed-ID check. Locked encrypted boxes
+	 * fail with a `code: -1` lease error (kernel `Language(314)`).
+	 */
+	async openNotebook(id: string): Promise<null> {
+		return this.request<null>(
+			"/api/notebook/openNotebook",
+			{ notebook: id },
+			{ retryable: false },
+		);
+	}
+
+	/**
+	 * `/api/notebook/closeNotebook` — posts as `notebook` (the endpoint's
+	 * real body field). Unmount cannot fail; the only failure path is a
+	 * malformed id (`code: -1`) — unlike its siblings, the handler does not
+	 * reject an empty string first, it goes straight to the malformed-ID
+	 * check.
+	 */
+	async closeNotebook(id: string): Promise<null> {
+		return this.request<null>(
+			"/api/notebook/closeNotebook",
+			{ notebook: id },
+			{ retryable: false },
+		);
+	}
+
+	/**
+	 * `/api/notebook/lsNotebooks` — unwraps `data.notebooks`. The unwrap is
+	 * guarded: a source-unreachable `code: 0` / `data: null` envelope
+	 * surfaces as `SiYuanApiError`, never a raw `TypeError` (same as
+	 * createNotebook).
+	 */
 	async listNotebooks(): Promise<NotebookInfo[]> {
 		const data = await this.request<{
-			notebooks: NotebookInfo[];
+			notebooks?: NotebookInfo[];
 		}>("/api/notebook/lsNotebooks", {}, { retryable: true });
+		if (data?.notebooks === undefined) {
+			throw new SiYuanApiError(200, 0, "envelope data carries no notebooks");
+		}
 		return data.notebooks;
 	}
 
@@ -100,24 +204,46 @@ export class SiYuanKernelClient {
 	}
 
 	/**
-	 * `/api/search/fullTextSearchBlock`. Only `query`/`paths`/`pageSize` are
-	 * exposed; `method: 0` is hardcoded and `types`/`orderBy`/`groupBy` are
-	 * omitted entirely, so the SQL-smuggling bypass cannot be reintroduced by a
-	 * caller.
+	 * `/api/search/fullTextSearchBlock`. Only `query`/`paths` are required;
+	 * `page` (1-based) and `pageSize` are optional and omitted from the wire
+	 * body when unset — the kernel defaults are page 1 / pageSize 32, and
+	 * `pageCount` in the response reveals the effective page size. `method: 0`
+	 * is hardcoded and `types`/`orderBy`/`groupBy` are omitted entirely, so the
+	 * SQL-smuggling bypass cannot be reintroduced by a caller. Pagination runs
+	 * in SQL (LIMIT/OFFSET), so an out-of-range `page` is a benign empty page.
 	 */
 	async search(params: {
 		query: string;
 		paths: string[];
-		pageSize: number;
+		page?: number;
+		pageSize?: number;
 	}): Promise<SearchResult> {
 		return this.request<SearchResult>(
 			"/api/search/fullTextSearchBlock",
-			{
-				query: params.query,
-				paths: params.paths,
-				pageSize: params.pageSize,
-				method: 0,
-			},
+			{ ...compact(params), method: 0 },
+			{ retryable: true },
+		);
+	}
+
+	/**
+	 * `/api/search/listInvalidBlockRefs` — blocks whose refs point at missing
+	 * targets (e.g. after removeDocByID/deleteBlock). Paginated read: `page` is
+	 * 1-based; omitted params are omitted from the wire body, so the kernel's
+	 * 1/32 defaults apply.
+	 *
+	 * Out-of-range `page` resolves `null` — the kernel's panic path flushes a
+	 * `code: 0` / `data: null` envelope — while a page at the exact-multiple
+	 * boundary returns an empty page object; treat both as "nothing more".
+	 * (fullTextSearchBlock paginates in SQL instead, so the same params yield a
+	 * benign empty page there — not a shared contract.)
+	 */
+	async listInvalidBlockRefs(params?: {
+		page?: number;
+		pageSize?: number;
+	}): Promise<SearchResult | null> {
+		return this.request<SearchResult | null>(
+			"/api/search/listInvalidBlockRefs",
+			compact(params ?? {}),
 			{ retryable: true },
 		);
 	}
@@ -220,6 +346,28 @@ export class SiYuanKernelClient {
 		});
 	}
 
+	/**
+	 * `/api/filetree/renameDocByID` — the hpath's last segment becomes the new
+	 * title; the physical `.sy` path and block id are unchanged, and the kernel
+	 * pushes a `rename` broadcast event. Titles beyond 512 runes fail with
+	 * `code: -1`; an empty title is silently substituted with the kernel's
+	 * default "untitled" title.
+	 *
+	 * Failure paths: a malformed id fails with `code: -1` ("invalid ID
+	 * argument"); a well-formed but unresolvable id — including a
+	 * locked/encrypted box — fails with `code: -1` and a `closeTimeout` payload.
+	 * Renaming a notebook's box/root doc renames the notebook itself, but only
+	 * when the box-doc feature is enabled; without it the box-doc id is
+	 * unresolvable and hits the same failure path as any unknown id.
+	 */
+	async renameDocByID(id: string, title: string): Promise<null> {
+		return this.request<null>(
+			"/api/filetree/renameDocByID",
+			{ id, title },
+			{ retryable: false },
+		);
+	}
+
 	/** `/api/filetree/removeDocByID`. Takes the endpoint's real field `id`; tool-schema naming is the extension's job. */
 	async removeDocByID(id: string): Promise<null> {
 		return this.request<null>(
@@ -282,25 +430,39 @@ export class SiYuanKernelClient {
 				);
 			}
 
+			// Unconsumed bodies pin the keep-alive connection; cancel before
+			// abandoning the response on every early-exit path.
 			if (res.status === 401 || res.status === 403) {
+				cancelBody(res);
 				throw new SiYuanAuthError(res.status);
 			}
 			if (res.status === 429) {
+				cancelBody(res);
 				throw new SiYuanRateLimitError(res.status, parseRetryAfter(res));
 			}
 			// 5xx gets the retry; other non-2xx (400/404/405) do not. A 5xx with an
 			// unparseable body still surfaces as SiYuanApiError with the status.
 			if (res.status >= 500 && opts.retryable && attempt === 0) {
+				cancelBody(res);
 				continue;
 			}
 			if (!isOk(res.status)) {
+				cancelBody(res);
 				throw new SiYuanApiError(res.status);
 			}
 
 			let parsed: unknown;
 			try {
 				parsed = await res.json();
-			} catch {
+			} catch (err) {
+				// A stalled body trips the same timeout signal as the fetch itself.
+				if (isTimeoutError(err)) {
+					if (opts.retryable && attempt === 0) {
+						cancelBody(res);
+						continue;
+					}
+					throw new SiYuanTimeoutError(TIMEOUT_MS);
+				}
 				// Proxy corruption, HTML error page, … — keep the mapping total.
 				throw new SiYuanApiError(res.status);
 			}
@@ -338,6 +500,11 @@ function blockWriteBody(
 	params: Record<string, unknown>,
 ): Record<string, unknown> {
 	return { ...compact(params), dataType: "markdown" };
+}
+
+/** Cancel an abandoned body so it cannot pin the keep-alive connection. */
+function cancelBody(res: Response): void {
+	res.body?.cancel().catch(() => {});
 }
 
 function isOk(status: number): boolean {

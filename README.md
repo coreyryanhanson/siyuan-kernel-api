@@ -30,7 +30,7 @@ const rows = await client.query(
 
 const result = await client.search({
  query: "docker networking",
- paths: [notebooks[0].id],
+ paths: [notebooks[0]?.id ?? ""],
  pageSize: 64,
 });
 
@@ -44,8 +44,13 @@ const children = await client.getChildBlocks("<block-id>");
 | --- | --- | --- |
 | `getVersion()` | `/api/system/version` | Raw version string |
 | `listNotebooks()` | `/api/notebook/lsNotebooks` | Unwraps `data.notebooks` |
+| `createNotebook(name)` | `/api/notebook/createNotebook` | Returns the new notebook row (`id`, `closed`, …); an empty/whitespace name gets the kernel's default name |
+| `removeNotebook(id)` | `/api/notebook/removeNotebook` | Posts the id as `notebook`; a well-formed but unknown id is a silent success |
+| `renameNotebook(id, name)` | `/api/notebook/renameNotebook` | Posts the id as `notebook` |
+| `openNotebook(id)` | `/api/notebook/openNotebook` | Posts the id as `notebook`; the recovery path for writes into a notebook closed in the UI |
+| `closeNotebook(id)` | `/api/notebook/closeNotebook` | Posts the id as `notebook` |
 | `query(stmt, mode)` | `/api/query/sql` | `mode` is always `"readonly"` |
-| `search({query, paths, pageSize})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply) |
+| `search({query, paths, page?, pageSize?})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply); kernel-default pagination 1/32, 1-based `page` |
 | `exportMarkdown(id)` | `/api/export/exportMdContent` | Doc as GFM markdown |
 | `getChildBlocks(id)` | `/api/block/getChildBlocks` | Children in document order |
 | `createDocWithMarkdown({notebook, path, markdown, parentID?, tags?})` | `/api/filetree/createDocWithMd` | Returns the new doc's ID |
@@ -54,8 +59,10 @@ const children = await client.getChildBlocks("<block-id>");
 | `updateBlock({id, data, lockType?})` | `/api/block/updateBlock` | |
 | `deleteBlock(id)` | `/api/block/deleteBlock` | |
 | `moveBlock({id, previousID?, parentID?})` | `/api/block/moveBlock` | Returns `null` (the kernel sets no `data` here) |
+| `renameDocByID(id, title)` | `/api/filetree/renameDocByID` | Updates the hpath's last segment; renaming the box doc renames the notebook (when box-doc is enabled) |
 | `removeDocByID(id)` | `/api/filetree/removeDocByID` | |
 | `moveDocsByID({fromIDs, toID})` | `/api/filetree/moveDocsByID` | |
+| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; resolves `null` for a page past the kernel's range, an empty page at the exact-multiple boundary |
 
 All requests are `POST` with JSON bodies. Content writes always send `dataType: "markdown"`, since the endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing.
 
@@ -90,7 +97,7 @@ Retry policy, built in:
 
 ## Scope notes
 
-- **Documented endpoints only, two named exceptions**: `/api/search/fullTextSearchBlock` (absent from SiYuan's API.md, but backed by the same kernel function SiYuan's own MCP server exposes) and the `mode: "readonly"` flag on `/api/query/sql` (kernel-enforced `sqlite3_stmt_readonly` check). Both are pinned by integration tests.
+- **Documented endpoints only, three named exceptions**: `/api/search/fullTextSearchBlock` (absent from SiYuan's API.md, but backed by the same kernel function SiYuan's own MCP server exposes), `/api/search/listInvalidBlockRefs`, and the `mode: "readonly"` flag on `/api/query/sql` (kernel-enforced `sqlite3_stmt_readonly` check). All are pinned by integration tests.
 - The search method hardcodes `method: 0` (keyword). The route also accepts `method: 2` (SQL search), which is an admin-only capability; not exposing it keeps raw SQL reachable only through `query()`.
 - `getVersion()` fetches and returns the version string; it holds no pinned constant and enforces nothing.
 - Types cover only the fields these methods consume; unknown fields pass through via `Record<string, unknown>` intersections.
@@ -102,6 +109,7 @@ npm run typecheck   # tsc --noEmit
 npm test            # vitest unit tests
 npm run lint        # oxlint --deny-warnings
 npm run fmt:check   # oxfmt --check
+node scripts/check-pack.mjs   # tarball contents == tracked non-test .ts files
 ```
 
 `integration.si.test.ts` runs against a live SiYuan kernel: enabled with `SIYUAN_INTEGRATION=1`, configured via `SIYUAN_BASE_URL` / `SIYUAN_API_TOKEN`, plus `SIYUAN_INTEGRATION_THROTTLE=1` for the 429 throttle case. Unit tests mock `fetch`.

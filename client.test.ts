@@ -197,6 +197,29 @@ describe("error mapping", () => {
 		expect((err as SiYuanApiError).msg).toBeUndefined();
 	});
 
+	it("maps a 2xx whose body is valid JSON but not an envelope to SiYuanApiError", async () => {
+		const { fn } = mockFetch(() => jsonResponse(200, { foo: 1 }));
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(SiYuanApiError);
+		expect((err as SiYuanApiError).status).toBe(200);
+		expect((err as SiYuanApiError).code).toBeUndefined();
+	});
+
+	it("maps a non-string envelope msg to SiYuanApiError without the msg text", async () => {
+		const { fn } = mockFetch(() =>
+			jsonResponse(200, { code: -1, msg: 42, data: null }),
+		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(SiYuanApiError);
+		expect((err as SiYuanApiError).status).toBe(200);
+		expect((err as SiYuanApiError).code).toBe(-1);
+		expect((err as SiYuanApiError).msg).toBeUndefined();
+	});
+
 	it("maps a 2xx with a non-envelope body (HTML error page) to SiYuanApiError", async () => {
 		const { fn } = mockFetch(
 			() => new Response("<html>maintenance</html>", { status: 200 }),
@@ -259,6 +282,57 @@ describe("retry policy", () => {
 		expect(err).toBeInstanceOf(SiYuanTimeoutError);
 	});
 
+	it("throws SiYuanApiError after both read attempts fail with 5xx", async () => {
+		const { fn } = mockFetch(() => new Response("err", { status: 503 }));
+		const err = await request(client(fn), "/read", {}, true).catch(
+			(e: unknown) => e,
+		);
+		expect(fn).toHaveBeenCalledTimes(2);
+		expect(err).toBeInstanceOf(SiYuanApiError);
+		expect((err as SiYuanApiError).status).toBe(503);
+	});
+
+	it("maps a non-Error fetch rejection to SiYuanNetworkError with no cause", async () => {
+		const { fn } = mockFetch(() => {
+			throw undefined;
+		});
+		const err = await request(client(fn), "/read", {}, false).catch(
+			(e: unknown) => e,
+		);
+		expect(err).toBeInstanceOf(SiYuanNetworkError);
+		expect((err as SiYuanNetworkError).cause).toBeUndefined();
+	});
+
+	it("retries a read whose body stalls past the timeout, then throws SiYuanTimeoutError", async () => {
+		const { fn } = mockFetch(() => {
+			// Response whose json() fails with the timeout error — a stalled body
+			// trips the same signal as the fetch itself in real transports.
+			const res = new Response("{", { status: 200 });
+			Object.defineProperty(res, "json", {
+				value: () =>
+					Promise.reject(
+						new DOMException("The operation was aborted.", "TimeoutError"),
+					),
+			});
+			return res;
+		});
+		const err = await request(client(fn), "/read", {}, true).catch(
+			(e: unknown) => e,
+		);
+		expect(fn).toHaveBeenCalledTimes(2);
+		expect(err).toBeInstanceOf(SiYuanTimeoutError);
+	});
+
+	it("parses Retry-After: 0 as 0", async () => {
+		const { fn } = mockFetch(() =>
+			jsonResponse(429, { code: -1, msg: "throttled" }, { "Retry-After": "0" }),
+		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
+		expect((err as SiYuanRateLimitError).retryAfterSeconds).toBe(0);
+	});
+
 	it("never retries a write on 5xx (exactly 1 call), then throws SiYuanApiError", async () => {
 		const { fn } = mockFetch(() => new Response("err", { status: 500 }));
 		const err = await request(client(fn), "/write", {}, false).catch(
@@ -299,6 +373,8 @@ describe("endpoint surface", () => {
 	const okBody = <T>(data: T) => jsonResponse(200, envelope(data));
 
 	it("listNotebooks hits lsNotebooks and unwraps data.notebooks", async () => {
+		// `boxDocEnabled` is an envelope-level field in the kernel; here it only
+		// proves Record<string, unknown> pass-through on rows.
 		const { fn, calls } = mockFetch(() =>
 			okBody({ notebooks: [{ id: "b1", name: "NB", boxDocEnabled: true }] }),
 		);
@@ -310,6 +386,74 @@ describe("endpoint surface", () => {
 		expect(notebooks).toEqual([{ id: "b1", name: "NB", boxDocEnabled: true }]);
 	});
 
+	it("listNotebooks throws SiYuanApiError, not TypeError, when data carries no notebooks", async () => {
+		// Source-unreachable code 0 / data null envelope: the guarded unwrap
+		// must surface it as a typed error, never an unguarded property chain.
+		const { fn } = mockFetch(() => okBody(null));
+		const err = await client(fn)
+			.listNotebooks()
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(SiYuanApiError);
+		expect((err as SiYuanApiError).status).toBe(200);
+	});
+
+	it("createNotebook posts { name } and unwraps data.notebook", async () => {
+		const notebookRow = {
+			id: "nb1",
+			name: "NB",
+			closed: false,
+		};
+		const { fn, calls } = mockFetch(() => okBody({ notebook: notebookRow }));
+		const notebook = await client(fn).createNotebook("NB");
+		expect(calls[0]!.url).toBe(
+			"http://127.0.0.1:6806/api/notebook/createNotebook",
+		);
+		expect(calls[0]!.init.body).toBe(JSON.stringify({ name: "NB" }));
+		expect(notebook).toEqual(notebookRow);
+	});
+
+	it("createNotebook throws SiYuanApiError, not TypeError, when data carries no notebook", async () => {
+		// Source-unreachable code 0 / data null envelope: the guarded unwrap
+		// must surface it as a typed error, never an unguarded property chain.
+		const { fn } = mockFetch(() => okBody(null));
+		const err = await client(fn)
+			.createNotebook("NB")
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(SiYuanApiError);
+		expect((err as SiYuanApiError).status).toBe(200);
+	});
+
+	it.each([
+		[
+			(c: SiYuanKernelClient) => c.removeNotebook("nb1"),
+			"/api/notebook/removeNotebook",
+			{ notebook: "nb1" },
+		],
+		[
+			(c: SiYuanKernelClient) => c.renameNotebook("nb1", "Renamed"),
+			"/api/notebook/renameNotebook",
+			{ notebook: "nb1", name: "Renamed" },
+		],
+		[
+			(c: SiYuanKernelClient) => c.openNotebook("nb1"),
+			"/api/notebook/openNotebook",
+			{ notebook: "nb1" },
+		],
+		[
+			(c: SiYuanKernelClient) => c.closeNotebook("nb1"),
+			"/api/notebook/closeNotebook",
+			{ notebook: "nb1" },
+		],
+	] as const)(
+		"%s posts the endpoint's real fields and returns null",
+		async (call, path, body) => {
+			const { fn, calls } = mockFetch(() => okBody(null));
+			await expect(call(client(fn))).resolves.toBeNull();
+			expect(calls[0]!.url).toBe(`http://127.0.0.1:6806${path}`);
+			expect(calls[0]!.init.body).toBe(JSON.stringify(body));
+		},
+	);
+
 	it("query sends stmt and the readonly mode", async () => {
 		const { fn, calls } = mockFetch(() => okBody([{ id: "r1" }]));
 		const rows = await client(fn).query("SELECT 1");
@@ -320,7 +464,7 @@ describe("endpoint surface", () => {
 		expect(rows).toEqual([{ id: "r1" }]);
 	});
 
-	it("search sends exactly the four pinned fields", async () => {
+	it("search omits unset page/pageSize but keeps method: 0", async () => {
 		const { fn, calls } = mockFetch(() =>
 			okBody({
 				blocks: [],
@@ -329,11 +473,7 @@ describe("endpoint surface", () => {
 				pageCount: 1,
 			}),
 		);
-		const res = await client(fn).search({
-			query: "marker",
-			paths: ["box1"],
-			pageSize: 10,
-		});
+		const res = await client(fn).search({ query: "marker", paths: ["box1"] });
 		expect(calls[0]!.url).toBe(
 			"http://127.0.0.1:6806/api/search/fullTextSearchBlock",
 		);
@@ -341,19 +481,79 @@ describe("endpoint surface", () => {
 			string,
 			unknown
 		>;
-		expect(Object.keys(body).sort()).toEqual([
-			"method",
-			"pageSize",
-			"paths",
-			"query",
-		]);
-		expect(body).toEqual({
-			query: "marker",
-			paths: ["box1"],
-			pageSize: 10,
-			method: 0,
-		});
+		expect(Object.keys(body).sort()).toEqual(["method", "paths", "query"]);
+		expect(body).toEqual({ query: "marker", paths: ["box1"], method: 0 });
 		expect(res.matchedBlockCount).toBe(0);
+	});
+
+	it.each([
+		[{ page: 2, pageSize: 10 }],
+		[{ page: 2 }],
+		[{ pageSize: 10 }],
+	] as const)(
+		"search sends exactly the page/pageSize keys that are set: %o",
+		async (pageParams) => {
+			const { fn, calls } = mockFetch(() =>
+				okBody({
+					blocks: [],
+					matchedBlockCount: 0,
+					matchedRootCount: 0,
+					pageCount: 1,
+				}),
+			);
+			await client(fn).search({
+				query: "marker",
+				paths: ["box1"],
+				...pageParams,
+			});
+			expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+				query: "marker",
+				paths: ["box1"],
+				...pageParams,
+				method: 0,
+			});
+		},
+	);
+
+	it("listInvalidBlockRefs posts {} with no params and returns the page object", async () => {
+		const page = {
+			blocks: [{ id: "b1", content: "x", updated: "20240101120000" }],
+			matchedBlockCount: 1,
+			matchedRootCount: 1,
+			pageCount: 1,
+		};
+		const { fn, calls } = mockFetch(() => okBody(page));
+		await expect(client(fn).listInvalidBlockRefs()).resolves.toEqual(page);
+		expect(calls[0]!.url).toBe(
+			"http://127.0.0.1:6806/api/search/listInvalidBlockRefs",
+		);
+		expect(calls[0]!.init.body).toBe(JSON.stringify({}));
+	});
+
+	it("listInvalidBlockRefs passes page/pageSize through when set", async () => {
+		const { fn, calls } = mockFetch(() => okBody(null));
+		await client(fn).listInvalidBlockRefs({ page: 2, pageSize: 5 });
+		expect(calls[0]!.init.body).toBe(JSON.stringify({ page: 2, pageSize: 5 }));
+	});
+
+	it("listInvalidBlockRefs resolves null for a page past the panic boundary", async () => {
+		const { fn } = mockFetch(() => okBody(null));
+		await expect(
+			client(fn).listInvalidBlockRefs({ page: 9999 }),
+		).resolves.toBeNull();
+	});
+
+	it("listInvalidBlockRefs unwraps the exact-multiple empty page object", async () => {
+		const emptyPage = {
+			blocks: [],
+			matchedBlockCount: 0,
+			matchedRootCount: 0,
+			pageCount: 0,
+		};
+		const { fn } = mockFetch(() => okBody(emptyPage));
+		await expect(
+			client(fn).listInvalidBlockRefs({ page: 1, pageSize: 1 }),
+		).resolves.toEqual(emptyPage);
 	});
 
 	it("exportMarkdown and getChildBlocks send { id }", async () => {
@@ -446,6 +646,19 @@ describe("endpoint surface", () => {
 		expect(calls[0]!.init.body).toBe(JSON.stringify({ id: "blk" }));
 	});
 
+	it("renameDocByID sends { id, title } and returns null", async () => {
+		const { fn, calls } = mockFetch(() => okBody(null));
+		await expect(
+			client(fn).renameDocByID("d1", "New Title"),
+		).resolves.toBeNull();
+		expect(calls[0]!.url).toBe(
+			"http://127.0.0.1:6806/api/filetree/renameDocByID",
+		);
+		expect(calls[0]!.init.body).toBe(
+			JSON.stringify({ id: "d1", title: "New Title" }),
+		);
+	});
+
 	it("removeDocByID and moveDocsByID send the endpoint's real fields and return null", async () => {
 		const { fn, calls } = mockFetch(() => okBody(null));
 		await expect(client(fn).removeDocByID("d1")).resolves.toBeNull();
@@ -468,17 +681,41 @@ describe("endpoint surface", () => {
 
 	it("reads retry once on 5xx (2 calls); writes never retry (1 call)", async () => {
 		for (const [call, expected] of [
+			[(c: SiYuanKernelClient) => c.getVersion(), 2],
+			[(c: SiYuanKernelClient) => c.query("SELECT id FROM blocks LIMIT 1"), 2],
+			[(c: SiYuanKernelClient) => c.search({ query: "q", paths: ["nb1"] }), 2],
 			[(c: SiYuanKernelClient) => c.listNotebooks(), 2],
+			[(c: SiYuanKernelClient) => c.listInvalidBlockRefs(), 2],
+			[(c: SiYuanKernelClient) => c.exportMarkdown("d1"), 2],
+			[(c: SiYuanKernelClient) => c.getChildBlocks("b1"), 2],
+			[(c: SiYuanKernelClient) => c.createNotebook("NB"), 1],
+			[(c: SiYuanKernelClient) => c.renameNotebook("nb", "New"), 1],
+			[(c: SiYuanKernelClient) => c.openNotebook("nb"), 1],
+			[(c: SiYuanKernelClient) => c.closeNotebook("nb"), 1],
+			[(c: SiYuanKernelClient) => c.renameDocByID("d", "t"), 1],
+			[
+				(c: SiYuanKernelClient) => c.insertBlock({ data: "x", parentID: "p" }),
+				1,
+			],
 			[
 				(c: SiYuanKernelClient) => c.appendBlock({ data: "x", parentID: "p" }),
 				1,
 			],
+			[(c: SiYuanKernelClient) => c.updateBlock({ id: "b1", data: "x" }), 1],
+			[(c: SiYuanKernelClient) => c.deleteBlock("b1"), 1],
+			[(c: SiYuanKernelClient) => c.moveBlock({ id: "b1", parentID: "p" }), 1],
 			[
 				(c: SiYuanKernelClient) =>
 					c.createDocWithMarkdown({ notebook: "b", path: "/", markdown: "m" }),
 				1,
 			],
 			[(c: SiYuanKernelClient) => c.removeDocByID("d"), 1],
+			[(c: SiYuanKernelClient) => c.removeNotebook("nb"), 1],
+			[
+				(c: SiYuanKernelClient) =>
+					c.moveDocsByID({ fromIDs: ["a"], toID: "nb1" }),
+				1,
+			],
 		] as const) {
 			const { fn } = mockFetch(() => new Response("err", { status: 500 }));
 			await expect(call(client(fn))).rejects.toThrow(SiYuanApiError);

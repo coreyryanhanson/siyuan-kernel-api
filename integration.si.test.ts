@@ -13,14 +13,19 @@
  *   1. search `paths`-shape pin      (first asserted case, after setup/seeding)
  *   2. auth smoke matrix
  *   3. verified-create contract pin
- *   4. auth-throttle contract pin    (last — arms the lockout)
+ *   4. notebook-lifecycle round-trip pin (client-driven, self-cleaning)
+ *   5. renameDocByID hPath pin + box-doc failure-path pin (guarded on the
+ *      live `boxDocEnabled` flag — with the flag on the same call renames
+ *      the notebook, a destructive side effect, so the pin is skipped)
+ *   6. listInvalidBlockRefs round-trip pin (planted orphan, self-cleaning)
+ *   7. auth-throttle contract pin    (last — arms the lockout)
  *
- * (M3 adds a raw-DELETE case after the throttle pin.) The suite opts out of
- * concurrency (`concurrent: false`, this vitest's explicit knob) — a concurrent
- * run would re-arm the throttle mid-suite.
- * S3-order numbering differs from declaration order deliberately: the auth
- * smoke matrix is kernel-dependent but touches no fixtures, so the search
- * shape runs first among asserted cases per §10's search-first rule.
+ * The suite opts out of concurrency (`concurrent: false`, this vitest's
+ * explicit knob) — a concurrent run would re-arm the throttle mid-suite.
+ * The auth smoke matrix is kernel-dependent but touches no fixtures, so the
+ * search shape pin runs first among asserted cases.
+ * Future fixtures and cases go above the throttle pin only when they must run
+ * before the lockout arms; everything after it runs under the armed lock.
  *
  * curl precursor (host-side, observed live @ 3.8.3):
  *   - correctly-shaped `paths: [<boxId>]` narrows results to the fixture box
@@ -32,7 +37,11 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SiYuanKernelClient } from "./client.js";
-import { SiYuanAuthError, SiYuanRateLimitError } from "./errors.js";
+import {
+	SiYuanApiError,
+	SiYuanAuthError,
+	SiYuanRateLimitError,
+} from "./errors.js";
 import type { SearchResult } from "./types.js";
 
 const BASE_URL = process.env.SIYUAN_BASE_URL ?? "";
@@ -155,6 +164,9 @@ describe.skipIf(!CONFIGURED)(
 		let fixtureABox = "";
 		let fixtureBBox = "";
 		let seedDocId = "";
+		// Created and removed by the lifecycle case itself; still listed in
+		// teardown so a mid-case failure leaks only as a recoverable stray.
+		let lifecycleBox = "";
 
 		beforeAll(async () => {
 			client = new SiYuanKernelClient(BASE_URL, TOKEN);
@@ -179,8 +191,8 @@ describe.skipIf(!CONFIGURED)(
 			expect(version).toBe(EXPECTED_VERSION);
 
 			// Fixtures via documented endpoints, raw — not through the client.
-			// Fixture-b satisfies the two-notebook policy for M3's multi-KB pins;
-			// no M2 case asserts against it.
+			// Fixture-b satisfies the two-notebook policy (search pinning needs a
+			// second box to prove path narrowing); no case asserts against it.
 			fixtureABox = await rawCreateNotebook(`pi-kb-test-fixture-a-${ts}`);
 			fixtureBBox = await rawCreateNotebook(`pi-kb-test-fixture-b-${ts}`);
 
@@ -195,7 +207,7 @@ describe.skipIf(!CONFIGURED)(
 		});
 
 		afterAll(async () => {
-			for (const box of [fixtureABox, fixtureBBox]) {
+			for (const box of [fixtureABox, fixtureBBox, lifecycleBox]) {
 				if (box === "") continue;
 				try {
 					await envelopeData(
@@ -316,6 +328,139 @@ describe.skipIf(!CONFIGURED)(
 			},
 		);
 
+		it("notebook lifecycle: create/rename/close/open/remove round-trip", async () => {
+			// Delta counts only — the shared kernel carries other notebooks.
+			const notebookCount = async () => (await client.listNotebooks()).length;
+			const baseline = await notebookCount();
+
+			// Create through the client, pinning the data.notebook unwrap —
+			// the method must return the full notebook row, not just the id.
+			const name = `pi-kb-lifecycle-${ts}`;
+			const created = await client.createNotebook(name);
+			expect(created.id).toBeTruthy();
+			expect(created.name).toBe(name);
+			lifecycleBox = created.id;
+
+			// Rename visible via lsNotebooks.
+			const renamed = `pi-kb-lifecycle-renamed-${ts}`;
+			await expect(
+				client.renameNotebook(created.id, renamed),
+			).resolves.toBeNull();
+			let rows = await client.listNotebooks();
+			expect(rows.find((nb) => nb.id === created.id)?.name).toBe(renamed);
+
+			// Close → open round-trip — the suite's only live assertion of
+			// the `closed` field. Both transitions are synchronous.
+			await expect(client.closeNotebook(created.id)).resolves.toBeNull();
+			rows = await client.listNotebooks();
+			expect(rows.find((nb) => nb.id === created.id)?.closed).toBe(true);
+			await expect(client.openNotebook(created.id)).resolves.toBeNull();
+			rows = await client.listNotebooks();
+			expect(rows.find((nb) => nb.id === created.id)?.closed).toBe(false);
+
+			// Remove drops the notebook: n → n+1 (create) → n.
+			await expect(client.removeNotebook(created.id)).resolves.toBeNull();
+			expect(await notebookCount()).toBe(baseline);
+			lifecycleBox = "";
+		});
+
+		it(
+			"renameDocByID: hPath's last segment follows the title; box-doc pin guarded on the live flag",
+			{ timeout: 60_000 },
+			async () => {
+				const renamed = `pikb-renamed-${ts}`;
+				await expect(
+					client.renameDocByID(seedDocId, renamed),
+				).resolves.toBeNull();
+				const exported = await client.exportMarkdown(seedDocId);
+				expect(exported.hPath).toBe(`/${renamed}`);
+
+				// Box-doc delegation is feature-gated: read the envelope-level
+				// `boxDocEnabled` flag raw (lsNotebooks envelope field — the typed
+				// listNotebooks discards it). With the flag off (the expected live
+				// state) the box-doc id is unresolvable and hits failure path 2;
+				// with it on, the same call would succeed and RENAME the notebook —
+				// a destructive side effect — so the pin is skipped instead.
+				const lsData = (await envelopeData(
+					await rawPost("/api/notebook/lsNotebooks", {}),
+				)) as { boxDocEnabled?: unknown };
+				if (lsData.boxDocEnabled === true) {
+					console.warn("box-doc enabled — skipping failure-path-2 pin");
+					return;
+				}
+				// Single live call: capture the rejection once, assert the typed
+				// error and its envelope code. (The kernel's `closeTimeout: 7000`
+				// payload rides in the envelope `data`, which SiYuanApiError does
+				// not surface — code/msg is all the client exposes.)
+				const failure = await client.renameDocByID(fixtureABox, renamed).then(
+					() => null,
+					(err: unknown) => err,
+				);
+				expect(failure).toBeInstanceOf(SiYuanApiError);
+				expect((failure as SiYuanApiError).code).toBe(-1);
+			},
+		);
+
+		it(
+			"listInvalidBlockRefs: planted orphan appears then clears; out-of-range page is null",
+			{ timeout: 120_000 },
+			async () => {
+				// Plant: a paragraph block, a doc referencing it, then delete the
+				// target — orphaning the ref. Fixture creation stays raw.
+				const targetMarker = `pikb-orphan-target-${ts}`;
+				const targetDocId = await rawCreateDoc(
+					fixtureABox,
+					"/orphan-target",
+					`# target\n\n${targetMarker}\n`,
+				);
+				const targetRows = await waitFor(
+					() =>
+						client.query(
+							`SELECT id FROM blocks WHERE box='${fixtureABox}' AND type='p' AND content='${targetMarker}'`,
+						),
+					(queried) => queried.length >= 1,
+				);
+				const targetBlockId = targetRows[0]?.id;
+				expect(typeof targetBlockId).toBe("string");
+
+				const holderMarker = `pikb-orphan-holder-${ts}`;
+				const holderDocId = await rawCreateDoc(
+					fixtureABox,
+					"/orphan-holder",
+					`${holderMarker}\n\n((${targetBlockId} "${holderMarker} ref"))\n`,
+				);
+				await client.deleteBlock(String(targetBlockId));
+
+				// The endpoint scans every notebook — assert contains, not counts.
+				const mentionsHolder = (r: SearchResult | null) =>
+					r !== null && r.blocks.some((b) => b.content.includes(holderMarker));
+				const page = await waitFor(
+					() => client.listInvalidBlockRefs(),
+					mentionsHolder,
+				);
+				expect(mentionsHolder(page)).toBe(true);
+				const row = page!.blocks.find((b) => b.content.includes(holderMarker));
+				expect(typeof row?.content).toBe("string");
+				expect(typeof row?.updated).toBe("string");
+
+				// Page far beyond pageCount (never pageCount + 1 — an exact
+				// multiple would return an empty page object, not null).
+				await expect(
+					client.listInvalidBlockRefs({ page: 9999 }),
+				).resolves.toBeNull();
+
+				// Clear: removing the referencing doc removes the refs entirely;
+				// the planted marker must drop off the list.
+				await client.removeDocByID(holderDocId);
+				await client.removeDocByID(targetDocId);
+				const cleared = await waitFor(
+					() => client.listInvalidBlockRefs(),
+					(r) => !mentionsHolder(r),
+				);
+				expect(mentionsHolder(cleared)).toBe(false);
+			},
+		);
+
 		it.skipIf(!THROTTLE_ENABLED)(
 			"auth throttle: 429 after the 6th bogus failure, shared per-IP lock",
 			{ timeout: 600_000 },
@@ -341,8 +486,8 @@ describe.skipIf(!CONFIGURED)(
 				expect(counter.count).toBe(6);
 
 				// 7th bogus call: the distinct 429. If 3.8.3 behaves differently,
-				// record reality and correct §10 (the pass criterion is the
-				// post-6th-failure 429, not the literal ordinal).
+				// record reality — the pass criterion is the post-6th-failure 429,
+				// not the literal ordinal.
 				const seventh = await bogus.listNotebooks().then(
 					() => null,
 					(err: unknown) => err,

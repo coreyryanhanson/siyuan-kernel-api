@@ -5,7 +5,7 @@
  * counts `SiYuanAuthError` but excludes `SiYuanRateLimitError`).
  */
 
-/** Base class for every error this client throws. Never thrown directly. */
+/** Base class for every error thrown on the request path. Never thrown directly. */
 export class SiYuanKernelError extends Error {
 	constructor(message: string, options?: ErrorOptions) {
 		super(message, options);
@@ -18,7 +18,7 @@ export class SiYuanApiError extends SiYuanKernelError {
 	readonly status: number;
 	/** Envelope `code`; undefined when the body carried no parseable envelope. */
 	readonly code?: number;
-	/** Envelope `msg`; undefined when the body carried no parseable envelope. */
+	/** Envelope `msg`, or the client's own text when a guarded unwrap failed (the kernel sends no `msg` there); undefined when the body carried no parseable envelope. */
 	readonly msg?: string;
 
 	constructor(status: number, code?: number, msg?: string) {
