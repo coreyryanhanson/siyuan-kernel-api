@@ -364,6 +364,19 @@ describe.skipIf(!CONFIGURED)(
 					(queried) => queried.length >= 1,
 				);
 				expect(appended).toHaveLength(1);
+
+				if (typeof opId !== "string")
+					throw new Error("appendBlock returned no op id");
+
+				// Pin getChildBlocks on a freshly appended childless paragraph:
+				// code 0 with data [] (never null), and an unknown id rejects
+				// with code -1 (SiYuanApiError) rather than null data.
+				const children = await client.getChildBlocks(opId);
+				expect(children).toEqual([]);
+				const missingErr = await client
+					.getChildBlocks("99999999999999-zzzzzzz")
+					.catch((e: unknown) => e);
+				expect(missingErr).toBeInstanceOf(SiYuanApiError);
 			},
 		);
 

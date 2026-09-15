@@ -137,6 +137,16 @@ describe("error mapping", () => {
 		expect((err as SiYuanRateLimitError).retryAfterSeconds).toBe(60);
 	});
 
+	it("parses Retry-After: 0 as 0", async () => {
+		const { fn } = mockFetch(() =>
+			jsonResponse(429, { code: -1, msg: "throttled" }, { "Retry-After": "0" }),
+		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
+		expect((err as SiYuanRateLimitError).retryAfterSeconds).toBe(0);
+	});
+
 	it("leaves retryAfterSeconds undefined when Retry-After is absent", async () => {
 		const { fn } = mockFetch(() =>
 			jsonResponse(429, { code: -1, msg: "throttled" }),
@@ -322,16 +332,6 @@ describe("retry policy", () => {
 		);
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(err).toBeInstanceOf(SiYuanTimeoutError);
-	});
-
-	it("parses Retry-After: 0 as 0", async () => {
-		const { fn } = mockFetch(() =>
-			jsonResponse(429, { code: -1, msg: "throttled" }, { "Retry-After": "0" }),
-		);
-		const err = await client(fn)
-			.getVersion()
-			.catch((e: unknown) => e);
-		expect((err as SiYuanRateLimitError).retryAfterSeconds).toBe(0);
 	});
 
 	it("never retries a write on 5xx (exactly 1 call), then throws SiYuanApiError", async () => {

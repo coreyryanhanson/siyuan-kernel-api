@@ -329,7 +329,12 @@ export class SiYuanKernelClient {
 		);
 	}
 
-	/** `/api/block/getChildBlocks`. */
+	/**
+	 * `/api/block/getChildBlocks`. Kernel guard rails (verified live against
+	 * 3.8.x): a childless block returns `code: 0`/`data: []` (never null), and
+	 * an unknown or locked-block id returns `code: -1` with null data, which
+	 * surfaces as `SiYuanApiError`.
+	 */
 	async getChildBlocks(id: string): Promise<ChildBlock[]> {
 		return this.request<ChildBlock[]>(
 			"/api/block/getChildBlocks",
