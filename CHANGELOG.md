@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Type declarations widened under `exactOptionalPropertyTypes` —
+  `SiYuanApiError.code`/`.msg` and `SiYuanRateLimitError.retryAfterSeconds`
+  are now `T | undefined` instead of bare-optional `T?`. Consumers compiling
+  the shipped `.ts` sources with that strict flag (the package has no build
+  step, so its source compiles inside the consumer's program) hit TS2412 on
+  the error-class constructors otherwise. No runtime effect; consumers
+  without the flag see no difference.
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

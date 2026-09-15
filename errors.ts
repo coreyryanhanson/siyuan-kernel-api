@@ -17,9 +17,9 @@ export class SiYuanKernelError extends Error {
 export class SiYuanApiError extends SiYuanKernelError {
 	readonly status: number;
 	/** Envelope `code`; undefined when the body carried no parseable envelope or when a guarded unwrap failed on a success envelope. Discriminator at `status: 200` / `code: undefined`: the client's own `msg` text means a guarded unwrap failed, no `msg` means the body was not a parseable envelope. */
-	readonly code?: number;
+	readonly code?: number | undefined;
 	/** Envelope `msg`, or the client's own text when a guarded unwrap failed (the kernel sends no `msg` there); undefined when the body carried no parseable envelope. */
-	readonly msg?: string;
+	readonly msg?: string | undefined;
 
 	constructor(status: number, code?: number, msg?: string) {
 		const detail = `HTTP ${status}${
@@ -48,7 +48,7 @@ export class SiYuanAuthError extends SiYuanKernelError {
 export class SiYuanRateLimitError extends SiYuanKernelError {
 	readonly status: number;
 	/** `Retry-After` in seconds as sent by the kernel; undefined when absent/unparseable. */
-	readonly retryAfterSeconds?: number;
+	readonly retryAfterSeconds?: number | undefined;
 
 	constructor(status: number, retryAfterSeconds?: number) {
 		super(
