@@ -34,6 +34,10 @@
 	},
 	"author": "Corey Ryan Hanson",
 	"license": "AGPL-3.0-or-later",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/coreyryanhanson/siyuan-kernel-api.git"
+	},
 	"devDependencies": {
 		"@types/node": "22.20.2",
 		"husky": "9.1.7",
