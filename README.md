@@ -65,7 +65,7 @@ const children = await client.getChildBlocks("<block-id>");
 | `renameDocByID(id, title)` | `/api/filetree/renameDocByID` | Updates the hpath's last segment; renaming the box doc renames the notebook (when box-doc is enabled) |
 | `removeDocByID(id)` | `/api/filetree/removeDocByID` | |
 | `moveDocsByID({fromIDs, toID})` | `/api/filetree/moveDocsByID` | |
-| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; resolves `null` for a page past the kernel's range, an empty page at the exact-multiple boundary |
+| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; on kernel 3.8.6 an out-of-range `page` rejects with `SiYuanApiError` (the pagination slice panics and recovery flushes an empty HTTP 200; 3.8.3 returned a `code: 0`/`data: null` envelope → `null`), an empty page at the exact-multiple boundary |
 
 All requests are `POST` with JSON bodies. Content writes always send `dataType: "markdown"`, since the endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing.
 

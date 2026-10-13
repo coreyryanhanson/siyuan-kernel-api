@@ -9,6 +9,12 @@
   with `method: 0` (keyword), and the generic name would collide with a
   semantic sibling endpoint (`/api/search/semanticSearchBlock`) at a later
   version. No behavior change; `types`/`orderBy`/`groupBy` remain omitted.
+- `listInvalidBlockRefs` against kernel 3.8.6: an out-of-range `page` now
+  surfaces as `SiYuanApiError` instead of resolving `null` — the kernel's
+  far-page response changed shape (details in the `listInvalidBlockRefs`
+  docs). Callers that branched on a `null` far-page to stop paginating must
+  catch the error instead; a page at the exact-multiple boundary still
+  returns an empty page object.
 
 ## [0.3.1] - 2026-09-15
 

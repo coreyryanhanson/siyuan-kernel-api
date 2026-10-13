@@ -83,7 +83,7 @@ const MASTER_PASSWORD = process.env.SIYUAN_MASTER_PASSWORD ?? "";
 const STAGE_B_ENABLED = ENABLED && MASTER_PASSWORD !== "";
 
 /** Test constant, not a client constant — the client ships no pinned version. */
-const EXPECTED_VERSION = "3.8.3";
+const EXPECTED_VERSION = "3.8.6";
 
 /**
  * Throttle lockout math (kernel @ 3.8.3): locked requests *overwrite* the
@@ -453,7 +453,7 @@ describe.skipIf(!CONFIGURED)(
 		);
 
 		it(
-			"listInvalidBlockRefs: planted orphan appears then clears; out-of-range page is null",
+			"listInvalidBlockRefs: planted orphan appears then clears; out-of-range page rejects with SiYuanApiError",
 			{ timeout: 120_000 },
 			async () => {
 				// Plant: a paragraph block, a doc referencing it, then delete the
@@ -494,11 +494,15 @@ describe.skipIf(!CONFIGURED)(
 				expect(typeof row?.content).toBe("string");
 				expect(typeof row?.updated).toBe("string");
 
-				// Page far beyond pageCount (never pageCount + 1 — an exact
-				// multiple would return an empty page object, not null).
+				// Page far beyond the result set: at kernel 3.8.6 the pagination
+				// slice panics (start > len) and the recovery middleware flushes an
+				// empty HTTP 200 — the client maps that to SiYuanApiError (an empty
+				// body is indistinguishable from proxy corruption, so it is never
+				// silently null). At 3.8.3 the same request returned code: 0/
+				// data: null; the envelope-null path is still pinned in client.test.ts.
 				await expect(
 					client.listInvalidBlockRefs({ page: 9999 }),
-				).resolves.toBeNull();
+				).rejects.toBeInstanceOf(SiYuanApiError);
 
 				// Clear: removing the referencing doc removes the refs entirely;
 				// the planted marker must drop off the list.

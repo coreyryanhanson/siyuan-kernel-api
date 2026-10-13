@@ -303,11 +303,16 @@ export class SiYuanKernelClient {
 	 * 1-based; omitted params are omitted from the wire body, so the kernel's
 	 * 1/32 defaults apply.
 	 *
-	 * Out-of-range `page` resolves `null` — the kernel's panic path flushes a
-	 * `code: 0` / `data: null` envelope — while a page at the exact-multiple
-	 * boundary returns an empty page object; treat both as "nothing more".
-	 * (fullTextSearchBlock paginates in SQL instead, so the same params yield a
-	 * benign empty page there — not a shared contract.)
+	 * Out-of-range `page`: at kernel 3.8.6 the pagination slice panics
+	 * (`start > len`) and the recovery middleware flushes an empty HTTP 200,
+	 * which surfaces as `SiYuanApiError` — an empty body is indistinguishable
+	 * from proxy corruption, so it is never silently null. (Kernel 3.8.3
+	 * returned a `code: 0` / `data: null` envelope there; that envelope-null
+	 * unwrap path remains pinned in client.test.ts.) A page at the
+	 * exact-multiple boundary returns an empty page object — the benign
+	 * end-of-results signal; the panic path above is not one.
+	 * (fullTextSearchBlock paginates in SQL instead, so the same params yield
+	 * a benign empty page there — not a shared contract.)
 	 */
 	async listInvalidBlockRefs(params?: {
 		page?: number;
