@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** renamed the keyword-search client method `search()` →
+  `fullTextSearch()` — the method wraps `/api/search/fullTextSearchBlock`
+  with `method: 0` (keyword), and the generic name would collide with a
+  semantic sibling endpoint (`/api/search/semanticSearchBlock`) at a later
+  version. No behavior change; `types`/`orderBy`/`groupBy` remain omitted.
+
 ## [0.3.1] - 2026-09-15
 
 ### Fixed

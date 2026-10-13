@@ -270,7 +270,7 @@ describe.skipIf(!CONFIGURED)(
 					r.blocks.some((block) => String(block.content).includes(seedMarker));
 				const result = await waitFor(
 					() =>
-						client.search({
+						client.fullTextSearch({
 							query: seedMarker,
 							paths: [fixtureABox],
 							pageSize: 100,

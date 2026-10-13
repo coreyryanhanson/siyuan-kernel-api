@@ -16,6 +16,7 @@ const PINNED_PUBLIC_METHODS = [
 	"createNotebook",
 	"deleteBlock",
 	"exportMarkdown",
+	"fullTextSearch",
 	"getChildBlocks",
 	"getEncryptedNotebookStatus",
 	"getVersion",
@@ -30,7 +31,6 @@ const PINNED_PUBLIC_METHODS = [
 	"removeNotebook",
 	"renameDocByID",
 	"renameNotebook",
-	"search",
 	"unlockAndOpenNotebook",
 	"updateBlock",
 ] as const;
@@ -67,7 +67,7 @@ const ARGS: { [M in PublicMethod]: Parameters<SiYuanKernelClient[M]> } = {
 	removeNotebook: ["x"],
 	renameDocByID: ["x", "x"],
 	renameNotebook: ["x", "x"],
-	search: [{ query: "x", paths: ["x"] }],
+	fullTextSearch: [{ query: "x", paths: ["x"] }],
 	unlockAndOpenNotebook: ["x", "x"],
 	updateBlock: [{ id: "x", data: "x" }],
 };

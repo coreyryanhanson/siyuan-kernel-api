@@ -553,7 +553,7 @@ describe("endpoint surface", () => {
 		await expect(client(fn).query("SELECT 1")).resolves.toEqual([]);
 	});
 
-	it("search omits unset page/pageSize but keeps method: 0", async () => {
+	it("fullTextSearch omits unset page/pageSize but keeps method: 0", async () => {
 		const { fn, calls } = mockFetch(() =>
 			okBody({
 				blocks: [],
@@ -562,7 +562,10 @@ describe("endpoint surface", () => {
 				pageCount: 1,
 			}),
 		);
-		const res = await client(fn).search({ query: "marker", paths: ["box1"] });
+		const res = await client(fn).fullTextSearch({
+			query: "marker",
+			paths: ["box1"],
+		});
 		expect(calls[0]!.url).toBe(
 			"http://127.0.0.1:6806/api/search/fullTextSearchBlock",
 		);
@@ -580,7 +583,7 @@ describe("endpoint surface", () => {
 		[{ page: 2 }],
 		[{ pageSize: 10 }],
 	] as const)(
-		"search sends exactly the page/pageSize keys that are set: %o",
+		"fullTextSearch sends exactly the page/pageSize keys that are set: %o",
 		async (pageParams) => {
 			const { fn, calls } = mockFetch(() =>
 				okBody({
@@ -590,7 +593,7 @@ describe("endpoint surface", () => {
 					pageCount: 1,
 				}),
 			);
-			await client(fn).search({
+			await client(fn).fullTextSearch({
 				query: "marker",
 				paths: ["box1"],
 				...pageParams,
@@ -797,7 +800,11 @@ describe("endpoint surface", () => {
 		for (const [call, expected] of [
 			[(c: SiYuanKernelClient) => c.getVersion(), 2],
 			[(c: SiYuanKernelClient) => c.query("SELECT id FROM blocks LIMIT 1"), 2],
-			[(c: SiYuanKernelClient) => c.search({ query: "q", paths: ["nb1"] }), 2],
+			[
+				(c: SiYuanKernelClient) =>
+					c.fullTextSearch({ query: "q", paths: ["nb1"] }),
+				2,
+			],
 			[(c: SiYuanKernelClient) => c.listNotebooks(), 2],
 			[(c: SiYuanKernelClient) => c.listInvalidBlockRefs(), 2],
 			[(c: SiYuanKernelClient) => c.exportMarkdown("d1"), 2],

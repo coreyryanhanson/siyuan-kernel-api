@@ -284,7 +284,7 @@ export class SiYuanKernelClient {
 	 * SQL-smuggling bypass cannot be reintroduced by a caller. Pagination runs
 	 * in SQL (LIMIT/OFFSET), so an out-of-range `page` is a benign empty page.
 	 */
-	async search(params: {
+	async fullTextSearch(params: {
 		query: string;
 		paths: string[];
 		page?: number;

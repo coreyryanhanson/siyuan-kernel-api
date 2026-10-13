@@ -28,7 +28,7 @@ const rows = await client.query(
   "SELECT id, content, root_id FROM blocks WHERE type = 'd' LIMIT 10",
 );
 
-const result = await client.search({
+const result = await client.fullTextSearch({
  query: "docker networking",
  paths: [],
  pageSize: 64,
@@ -53,7 +53,7 @@ const children = await client.getChildBlocks("<block-id>");
 | `unlockAndOpenNotebook(id, password)` | `/api/notebook/unlockAndOpenNotebook` | The encrypted counterpart of `openNotebook`: the recovery path out of the locked state that makes `openNotebook` fail with the lease error. Unlocked boxes auto-lock on idle |
 | `query(stmt)` | `/api/query/sql` | Readonly only: the kernel validates `"readonly"` for read-only safety; the unvalidated modes are a silent-corruption path on a derived index |
 | `getEncryptedNotebookStatus()` | `/api/notebook/getEncryptedNotebookStatus` | The encrypted family's state read (works in read-only workspaces). A row's `name` is empty for a box that is not mounted/unlocked |
-| `search({query, paths, page?, pageSize?})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply); kernel-default pagination 1/32, 1-based `page`. A `paths` entry is `boxId` or `boxId/hPath`; invalid entries are dropped silently |
+| `fullTextSearch({query, paths, page?, pageSize?})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply); kernel-default pagination 1/32, 1-based `page`. A `paths` entry is `boxId` or `boxId/hPath`; invalid entries are dropped silently |
 | `exportMarkdown(id)` | `/api/export/exportMdContent` | Doc as GFM markdown |
 | `getChildBlocks(id)` | `/api/block/getChildBlocks` | Children in document order |
 | `createDocWithMarkdown({notebook, path, markdown, parentID?, tags?})` | `/api/filetree/createDocWithMd` | Returns the new doc's ID |
@@ -69,7 +69,7 @@ const children = await client.getChildBlocks("<block-id>");
 
 All requests are `POST` with JSON bodies. Content writes always send `dataType: "markdown"`, since the endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing.
 
-The encrypted-notebook family is a lifecycle subset: `search()` and `query()` are not box-scoped and read the global plaintext index, so a created encrypted notebook is reachable by id-based reads once unlocked, not by those two.
+The encrypted-notebook family is a lifecycle subset: `fullTextSearch()` and `query()` are not box-scoped and read the global plaintext index, so a created encrypted notebook is reachable by id-based reads once unlocked, not by those two.
 
 ## Error handling
 
