@@ -27,6 +27,7 @@ Run one test file: `npx vitest run client.test.ts`. CI (Node 22) runs lint, fmt:
 
 ## Design constraints (don't undo these)
 
+- **Public-surface census.** `census.test.ts` pins the full prototype inventory (public + TS-private methods) and asserts token attachment on every public method; a new public method must join the pinned list with a signature-checked args entry and have its route's kernel-side auth posture verified — the census pins inventory and token attachment, not route tokenlessness.
 - The client is **policy-free**: no version gating, budgets, or scoping — that belongs to callers.
 - Every error extends `SiYuanKernelError`. `SiYuanRateLimitError` (429) is a *sibling* of `SiYuanAuthError`, never a subclass — a 429 can arrive with a correct token.
 - Retry policy: never retry 401/403/429 (bad-token retries lock the IP out); single retry for network/timeout/5xx on reads only; writes are never retried; hard 30 s timeout per attempt.
