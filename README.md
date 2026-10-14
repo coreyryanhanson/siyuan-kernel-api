@@ -55,6 +55,7 @@ const children = await client.getChildBlocks("<block-id>");
 | `getEncryptedNotebookStatus()` | `/api/notebook/getEncryptedNotebookStatus` | The encrypted family's state read (works in read-only workspaces). A row's `name` is empty for a box that is not mounted/unlocked |
 | `fullTextSearch({query, paths, page?, pageSize?})` | `/api/search/fullTextSearchBlock` | Keyword search only; `types`/`orderBy`/`groupBy` omitted (kernel defaults apply); kernel-default pagination 1/32, 1-based `page`. A `paths` entry is `boxId` or `boxId/hPath`; invalid entries are dropped silently |
 | `exportMarkdown(id)` | `/api/export/exportMdContent` | Doc as GFM markdown |
+| `getHPathByID(id)` | `/api/filetree/getHPathByID` | Hpath of the containing doc, from the live tree (fresh immediately after rename); the notebook name is not included; `/` for the box-doc virtual doc; unknown/invalid ids are kernel errors |
 | `getChildBlocks(id)` | `/api/block/getChildBlocks` | Children in document order |
 | `createDocWithMarkdown({notebook, path, markdown, parentID?, tags?})` | `/api/filetree/createDocWithMd` | Returns the new doc's ID |
 | `insertBlock({data, nextID?, previousID?, parentID?})` | `/api/block/insertBlock` | |

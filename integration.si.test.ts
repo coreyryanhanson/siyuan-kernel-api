@@ -12,12 +12,13 @@
  *
  *   1. search `paths`-shape pin      (first asserted case, after setup/seeding)
  *   2. auth smoke matrix
- *   3. verified-create contract pin
+ *   3. verified-create contract pin (+ getHPathByID containing-doc and
+ *      unknown-id pins)
  *   4. notebook-lifecycle round-trip pin (client-driven, self-cleaning)
- *   5. renameDocByID hPath pin + box-doc failure-path pin (guarded on the
- *      `boxDocEnabled` envelope flag from listNotebooks — with the flag on
- *      the same call renames the notebook, a destructive side effect, so
- *      the pin is skipped)
+ *   5. renameDocByID hPath pin + getHPathByID live-tree freshness and
+ *      box-doc pins (guarded on the `boxDocEnabled` envelope flag from
+ *      listNotebooks — with the flag on the rename call renames the
+ *      notebook, a destructive side effect, so it is skipped)
  *   6. listInvalidBlockRefs round-trip pin (planted orphan, self-cleaning)
  *   7. encrypted-notebook stage-A pins (fixture-free, stateless: typed
  *      status shape, 310 precondition rejection guarded on the live
@@ -377,6 +378,16 @@ describe.skipIf(!CONFIGURED)(
 					.getChildBlocks("99999999999999-zzzzzzz")
 					.catch((e: unknown) => e);
 				expect(missingErr).toBeInstanceOf(SiYuanApiError);
+
+				// Pin getHPathByID: any block id (here the appended paragraph)
+				// resolves to its containing doc's hpath, which excludes the
+				// notebook name, and an unknown id rejects with the same code -1
+				// envelope.
+				await expect(client.getHPathByID(opId)).resolves.toBe("/seed");
+				const hpathErr = await client
+					.getHPathByID("99999999999999-zzzzzzz")
+					.catch((e: unknown) => e);
+				expect(hpathErr).toBeInstanceOf(SiYuanApiError);
 			},
 		);
 
@@ -428,6 +439,13 @@ describe.skipIf(!CONFIGURED)(
 				const exported = await client.exportMarkdown(seedDocId);
 				expect(exported.hPath).toBe(`/${renamed}`);
 
+				// getHPathByID resolves from the live tree, not the blocks
+				// index: immediately after the rename it already reflects the
+				// new title.
+				await expect(client.getHPathByID(seedDocId)).resolves.toBe(
+					`/${renamed}`,
+				);
+
 				// Box-doc delegation is feature-gated: read the envelope-level
 				// `boxDocEnabled` flag off the typed listNotebooks envelope. With
 				// the flag off (the expected live state) the box-doc id is
@@ -437,6 +455,9 @@ describe.skipIf(!CONFIGURED)(
 				const { boxDocEnabled } = await client.listNotebooks();
 				if (boxDocEnabled) {
 					console.warn("box-doc enabled — skipping failure-path-2 pin");
+					// The box-doc feature's virtual doc answers getHPathByID
+					// with the root hpath.
+					await expect(client.getHPathByID(fixtureABox)).resolves.toBe("/");
 					return;
 				}
 				// Single live call: capture the rejection once, assert the typed

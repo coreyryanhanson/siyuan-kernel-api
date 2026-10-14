@@ -335,6 +335,24 @@ export class SiYuanKernelClient {
 	}
 
 	/**
+	 * `/api/filetree/getHPathByID`. Resolved from the live tree, not the
+	 * blocks index. Any block id resolves to its containing doc's hpath; the
+	 * hpath excludes the notebook name. The box-doc feature's virtual doc
+	 * returns "/". Unknown or invalid ids are kernel errors (`code: -1`); a
+	 * not-yet-indexed id during an active index task also rejects with
+	 * `code: -1` (msg `indexing`). Route is auth-only; a read-only role
+	 * context additionally passes a publish-access filter that can refuse
+	 * with `code: -1`.
+	 */
+	async getHPathByID(id: string): Promise<string> {
+		return this.request<string>(
+			"/api/filetree/getHPathByID",
+			{ id },
+			{ retryable: true },
+		);
+	}
+
+	/**
 	 * `/api/block/getChildBlocks`. Kernel guard rails (verified live against
 	 * 3.8.x): a childless block returns `code: 0`/`data: []` (never null), and
 	 * an unknown or locked-block id returns `code: -1` with null data, which

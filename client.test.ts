@@ -648,7 +648,7 @@ describe("endpoint surface", () => {
 		).resolves.toEqual(emptyPage);
 	});
 
-	it("exportMarkdown and getChildBlocks send { id }", async () => {
+	it("exportMarkdown, getChildBlocks and getHPathByID send { id }", async () => {
 		for (const [call, path] of [
 			[
 				(c: SiYuanKernelClient) => c.exportMarkdown("d1"),
@@ -657,6 +657,10 @@ describe("endpoint surface", () => {
 			[
 				(c: SiYuanKernelClient) => c.getChildBlocks("d1"),
 				"/api/block/getChildBlocks",
+			],
+			[
+				(c: SiYuanKernelClient) => c.getHPathByID("d1"),
+				"/api/filetree/getHPathByID",
 			],
 		] as const) {
 			const { fn, calls } = mockFetch(() => okBody([]));
@@ -809,6 +813,7 @@ describe("endpoint surface", () => {
 			[(c: SiYuanKernelClient) => c.listInvalidBlockRefs(), 2],
 			[(c: SiYuanKernelClient) => c.exportMarkdown("d1"), 2],
 			[(c: SiYuanKernelClient) => c.getChildBlocks("b1"), 2],
+			[(c: SiYuanKernelClient) => c.getHPathByID("d1"), 2],
 			[(c: SiYuanKernelClient) => c.getEncryptedNotebookStatus(), 2],
 			[(c: SiYuanKernelClient) => c.createNotebook("NB"), 1],
 			[(c: SiYuanKernelClient) => c.createEncryptedNotebook("NB", "pw"), 1],

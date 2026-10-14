@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- `getHPathByID(id)` — `/api/filetree/getHPathByID`: the hpath of the block
+  id's containing doc, from the live tree (fresh immediately after rename);
+  unknown or invalid ids surface as `SiYuanApiError` (`code: -1`).
+
 ## [0.4.0] - 2026-10-13
 
 ### Changed
