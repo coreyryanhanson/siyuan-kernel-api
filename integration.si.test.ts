@@ -84,7 +84,7 @@ const MASTER_PASSWORD = process.env.SIYUAN_MASTER_PASSWORD ?? "";
 const STAGE_B_ENABLED = ENABLED && MASTER_PASSWORD !== "";
 
 /** Test constant, not a client constant — the client ships no pinned version. */
-const EXPECTED_VERSION = "3.8.6";
+const EXPECTED_VERSION = "3.8.7";
 
 /**
  * Throttle lockout math (kernel @ 3.8.3): locked requests *overwrite* the
