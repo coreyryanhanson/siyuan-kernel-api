@@ -285,6 +285,11 @@ export class SiYuanKernelClient {
 	 * is hardcoded and `types`/`orderBy`/`groupBy` are omitted entirely, so the
 	 * SQL-smuggling bypass cannot be reintroduced by a caller. Pagination runs
 	 * in SQL (LIMIT/OFFSET), so an out-of-range `page` is a benign empty page.
+	 *
+	 * The non-nullable return rests on a kernel invariant: `data` is provably
+	 * non-null on a success envelope for this route (the kernel's null-data
+	 * path fires only on a cancelled request context, which here surfaces as a
+	 * transport error, not `null`).
 	 */
 	async fullTextSearch(params: {
 		query: string;
@@ -294,7 +299,7 @@ export class SiYuanKernelClient {
 	}): Promise<SearchResult> {
 		return this.request<SearchResult>(
 			"/api/search/fullTextSearchBlock",
-			{ ...compact(params), method: 0 },
+			{ ...params, method: 0 },
 			{ retryable: true },
 		);
 	}
@@ -320,7 +325,7 @@ export class SiYuanKernelClient {
 	}): Promise<SearchResult | null> {
 		return this.request<SearchResult | null>(
 			"/api/search/listInvalidBlockRefs",
-			compact(params ?? {}),
+			params ?? {},
 			{ retryable: true },
 		);
 	}
@@ -375,11 +380,9 @@ export class SiYuanKernelClient {
 		/** Plain string — the kernel does `tagsArg.(string)`; an array would panic into a silent `code: 0` / `data: null`. */
 		tags?: string;
 	}): Promise<string> {
-		return this.request<string>(
-			"/api/filetree/createDocWithMd",
-			compact(params),
-			{ retryable: false },
-		);
+		return this.request<string>("/api/filetree/createDocWithMd", params, {
+			retryable: false,
+		});
 	}
 
 	/** `/api/block/insertBlock`. `dataType: "markdown"` is hardcoded; see appendBlock. */
@@ -441,7 +444,7 @@ export class SiYuanKernelClient {
 		previousID?: string;
 		parentID?: string;
 	}): Promise<null> {
-		return this.request<null>("/api/block/moveBlock", compact(params), {
+		return this.request<null>("/api/block/moveBlock", params, {
 			retryable: false,
 		});
 	}
@@ -672,25 +675,15 @@ export class SiYuanKernelClient {
 	}
 }
 
-/** Request body with unset optional fields dropped. */
-function compact(params: Record<string, unknown>): Record<string, unknown> {
-	const body: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(params)) {
-		if (value !== undefined) {
-			body[key] = value;
-		}
-	}
-	return body;
-}
-
 /**
  * Body for the content-bearing block writes (insert/append/update): caller
- * fields pass through, `dataType` is always markdown.
+ * fields pass through, `dataType` is always markdown. Unset optional fields
+ * need no manual drop — JSON.stringify omits `undefined`-valued properties.
  */
 function blockWriteBody(
 	params: Record<string, unknown>,
 ): Record<string, unknown> {
-	return { ...compact(params), dataType: "markdown" };
+	return { ...params, dataType: "markdown" };
 }
 
 /** Cancel an abandoned body so it cannot pin the keep-alive connection. */

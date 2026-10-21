@@ -9,7 +9,9 @@
   atomic unit — the kernel commits and rolls them back independently, so pass
   a single element for all-or-nothing across ops. Also exports the
   `Transaction` and `TransactionOperation` payload types (the kernel's
-  request element and post-commit echo are one type).
+  request element and post-commit echo are one type; `Transaction`
+  declares the optional `undoOperations` field for opt-in editor undo-log
+  entries).
 
 ## [0.5.0] - 2026-10-14
 

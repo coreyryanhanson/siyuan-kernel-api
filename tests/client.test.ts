@@ -289,6 +289,7 @@ describe("retry policy", () => {
 		const err = await client(fn)
 			.removeDocByID("d1")
 			.catch((e: unknown) => e);
+		expect(fn).toHaveBeenCalledTimes(1);
 		expect(err).toBeInstanceOf(SiYuanNetworkError);
 		expect((err as SiYuanNetworkError).cause).toBeUndefined();
 	});

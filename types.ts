@@ -99,6 +99,8 @@ export type TransactionOperation = { action: string } & Record<string, unknown>;
  */
 export type Transaction = {
 	doOperations: TransactionOperation[];
+	/** Opt-in: caller-supplied undo ops enter the editor's global undo log and are replayed verbatim; the kernel never fills them itself. */
+	undoOperations?: TransactionOperation[];
 } & Record<string, unknown>;
 
 /** `data` of `/api/export/exportMdContent`. */

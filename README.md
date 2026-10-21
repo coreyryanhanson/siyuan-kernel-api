@@ -67,7 +67,7 @@ const children = await client.getChildBlocks("<block-id>");
 | `removeDocByID(id)` | `/api/filetree/removeDocByID` | |
 | `moveDocsByID({fromIDs, toID})` | `/api/filetree/moveDocsByID` | |
 | `transact(transactions)` | `/api/transactions` | Enqueues kernel transactions of block ops in array order. Each array element is its own atomic unit — the kernel commits and rolls them back independently, so pass a single element for all-or-nothing across ops. Never retried; the client stamps a strictly monotonic `reqId`. See `transact()`'s doc comment for the full contract — echo semantics, rejection phases, and the ≥32-op bulk path |
-| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; an out-of-range `page` rejects with `SiYuanApiError` (the kernel's pagination slice panics and recovery flushes an empty HTTP 200), an empty page at the exact-multiple boundary |
+| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; an out-of-range `page` rejects with `SiYuanApiError` (the kernel's pagination slice panics and recovery flushes an empty HTTP 200), and a page at the exact-multiple boundary resolves to an empty page object — the benign end-of-results signal |
 
 All requests are `POST` with JSON bodies. Content writes send `dataType: "markdown"` — the single-op endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing. The sole exception is `transact`: its ops carry no `dataType` at all, and op `data` is block DOM, never markdown.
 
@@ -110,7 +110,7 @@ Retry policy, built in:
   - `/api/notebook/createEncryptedNotebook` — the per-run encrypted fixture lifecycle (create → `closeNotebook` → unlock → remove).
   - `/api/notebook/unlockAndOpenNotebook` — the recovery path out of the locked-box states the lifecycle doc comments describe.
   - `/api/notebook/getEncryptedNotebookStatus` — the precondition gate for `createEncryptedNotebook` (`enabled`) and the recovery-flow read for which encrypted boxes exist and which are locked.
-  - `/api/transactions` — the kernel's real multi-op transaction endpoint, the sync protocol of the frontend app. SiYuan's API reference names it internal and outside the public stability guarantee; its documentation and compatibility contract live here, in the census pin and the manual probe suite. Verified against kernel 3.8.7 — build on it only with a pinned kernel version. The client types the payload (`{ transactions, reqId }`) and does not interpret actions.
+  - `/api/transactions` — the kernel's real multi-op transaction endpoint, the sync protocol of the frontend app. SiYuan's API reference names it internal and outside the public stability guarantee; its documentation and compatibility contract live here, in the census pin and the manual probe suite. Verified against kernel 3.8.8 — build on it only with a pinned kernel version. The client types the payload (`{ transactions, reqId }`) and does not interpret actions.
 
   The three encrypted routes require a kernel that ships them: on an older kernel the call surfaces as `SiYuanApiError`, with no promised transport shape.
 
