@@ -13,6 +13,7 @@ import type {
 	NotebookInfo,
 	NotebookList,
 	SearchResult,
+	Transaction,
 } from "./types.js";
 
 /** Hard per-attempt timeout; a read that exhausts its single retry worst-cases at ~60s wall clock. */
@@ -52,6 +53,8 @@ export class SiYuanKernelClient {
 	readonly baseUrl: string;
 	readonly token: string;
 	private readonly doFetch: typeof fetch;
+	/** Monotonic stamp backing transact()'s reqId; see that method's comment. */
+	private lastReqId = 0;
 
 	constructor(
 		baseUrl: string,
@@ -131,8 +134,7 @@ export class SiYuanKernelClient {
 	 * precondition gate for createEncryptedNotebook) and which encrypted
 	 * boxes exist, locked or unlocked. A pure read with no `CheckReadonly`,
 	 * so it works in read-only workspaces. A row's `name` is empty for a box
-	 * that is not mounted/unlocked. The `state` unions are the v3.8.3
-	 * kernel's values.
+	 * that is not mounted/unlocked.
 	 */
 	async getEncryptedNotebookStatus(): Promise<EncryptedNotebookStatus> {
 		return this.request<EncryptedNotebookStatus>(
@@ -303,12 +305,10 @@ export class SiYuanKernelClient {
 	 * 1-based; omitted params are omitted from the wire body, so the kernel's
 	 * 1/32 defaults apply.
 	 *
-	 * Out-of-range `page`: at kernel 3.8.6 the pagination slice panics
-	 * (`start > len`) and the recovery middleware flushes an empty HTTP 200,
-	 * which surfaces as `SiYuanApiError` — an empty body is indistinguishable
-	 * from proxy corruption, so it is never silently null. (Kernel 3.8.3
-	 * returned a `code: 0` / `data: null` envelope there; that envelope-null
-	 * unwrap path remains pinned in client.test.ts.) A page at the
+	 * Out-of-range `page`: the pagination slice panics (`start > len`) and
+	 * the recovery middleware flushes an empty HTTP 200, which surfaces as
+	 * `SiYuanApiError` — an empty body is indistinguishable from proxy
+	 * corruption, so it is never silently null. A page at the
 	 * exact-multiple boundary returns an empty page object — the benign
 	 * end-of-results signal; the panic path above is not one.
 	 * (fullTextSearchBlock paginates in SQL instead, so the same params yield
@@ -353,8 +353,8 @@ export class SiYuanKernelClient {
 	}
 
 	/**
-	 * `/api/block/getChildBlocks`. Kernel guard rails (verified live against
-	 * 3.8.x): a childless block returns `code: 0`/`data: []` (never null), and
+	 * `/api/block/getChildBlocks`. Kernel guard rails: a childless block
+	 * returns `code: 0`/`data: []` (never null), and
 	 * an unknown or locked-block id returns `code: -1` with null data, which
 	 * surfaces as `SiYuanApiError`.
 	 */
@@ -485,6 +485,76 @@ export class SiYuanKernelClient {
 		return this.request<null>("/api/filetree/moveDocsByID", params, {
 			retryable: false,
 		});
+	}
+
+	/**
+	 * `/api/transactions` — enqueue one or more kernel transactions of block
+	 * operations (kernel `PerformTransactions`, auth posture
+	 * AuthenticatedAccess|AdminAccess|WritableAccess). Each element of
+	 * `transactions` is its own atomic unit: the kernel queues and commits
+	 * them independently, so `[A, B]` can commit A, roll B back, and still
+	 * resolve. Pass a single element for all-or-nothing across its ops.
+	 * Elements run in array order with nothing interleaved between them.
+	 * Execution-phase rejections roll that transaction back — the kernel
+	 * reports those failure reasons only on its editor websocket, and a
+	 * rejected op is additionally pushed to every connected GUI, which pops
+	 * its "Abnormal State" dialog. Other rejections throw as plain
+	 * `SiYuanApiError`s (`code: -1` envelopes): an unbooted kernel, an
+	 * unparseable or empty payload, failed flashcard validation, an
+	 * encrypted-box lease rejection, a template-plan attach error, or a
+	 * post-commit echo-marshalling failure. At ≥32 ops, a delete/insert
+	 * transaction takes a whole-tree bulk path where one unresolvable id
+	 * no-ops the entire transaction behind the success ack — chunk large
+	 * deletes.
+	 *
+	 * Batching constraints: a transaction whose `doOperations` is empty is a
+	 * silent no-op; a `convertList` op must be the only op of the only
+	 * transaction.
+	 *
+	 * Op `data` is the kernel's own payload — a JSON string of inline block
+	 * DOM for the content ops (`insert`/`update` and the append/prepend
+	 * variants; the kernel parses it with BlockDOM2Tree), never markdown;
+	 * markdown content writes go through the single-op endpoints. The kernel
+	 * type-asserts that string unguarded, so a non-string `data` on a content
+	 * op panics the transaction into a rollback behind a success ack.
+	 *
+	 * Returns the kernel's post-commit echo: a re-marshalled copy of the
+	 * committed transactions. It is a hint, never evidence — delete and move
+	 * ops set no per-op data, and an execution-phase rollback still acks
+	 * success — so verify outcomes from a fresh read. Its one real payload
+	 * is a batched insert's new block id (`doOperations[].id`). This method
+	 * only guarantees the transactions have committed (or rolled back)
+	 * before it resolves — the handler blocks on the commit wait, so a tree
+	 * read (`getChildBlocks`, `getHPathByID`) issued after it sees final
+	 * state; SQL-index reads can lag behind the kernel's index queues.
+	 *
+	 * A rejection is not proof that nothing happened — the post-commit
+	 * echo-marshalling failure above commits before it throws, and the
+	 * request timeout can fire mid-commit — so treat a throw as
+	 * outcome-unknown and verify from a fresh read.
+	 *
+	 * `reqId` is generated here, not a caller field: the kernel takes the
+	 * transaction's timestamp from it and FIFOs the transaction queue on
+	 * exactly that field, so this client stamps a strictly monotonic client
+	 * timestamp — a constant 0 would sort every batch ahead of
+	 * already-queued transactions and jump the frontend's queue. The
+	 * ordering is wall-clock and subject to client/kernel clock skew, which
+	 * the client cannot see.
+	 *
+	 * Never retried: the route has no idempotency key, so a retried batch
+	 * re-applies behind a fresh success ack.
+	 */
+	async transact(
+		transactions: [Transaction, ...Transaction[]],
+	): Promise<Transaction[]> {
+		// Strictly monotonic even when two calls land in the same millisecond.
+		const reqId = Math.max(Date.now(), this.lastReqId + 1);
+		this.lastReqId = reqId;
+		return this.request<Transaction[]>(
+			"/api/transactions",
+			{ transactions, reqId },
+			{ retryable: false },
+		);
 	}
 
 	/**

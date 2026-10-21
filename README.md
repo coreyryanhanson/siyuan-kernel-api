@@ -66,9 +66,10 @@ const children = await client.getChildBlocks("<block-id>");
 | `renameDocByID(id, title)` | `/api/filetree/renameDocByID` | Updates the hpath's last segment; renaming the box doc renames the notebook (when box-doc is enabled) |
 | `removeDocByID(id)` | `/api/filetree/removeDocByID` | |
 | `moveDocsByID({fromIDs, toID})` | `/api/filetree/moveDocsByID` | |
-| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; on kernel 3.8.6 an out-of-range `page` rejects with `SiYuanApiError` (the pagination slice panics and recovery flushes an empty HTTP 200; 3.8.3 returned a `code: 0`/`data: null` envelope → `null`), an empty page at the exact-multiple boundary |
+| `transact(transactions)` | `/api/transactions` | Enqueues kernel transactions of block ops in array order. Each array element is its own atomic unit — the kernel commits and rolls them back independently, so pass a single element for all-or-nothing across ops. Never retried; the client stamps a strictly monotonic `reqId`. See `transact()`'s doc comment for the full contract — echo semantics, rejection phases, and the ≥32-op bulk path |
+| `listInvalidBlockRefs({page?, pageSize?})` | `/api/search/listInvalidBlockRefs` | Paginated; an out-of-range `page` rejects with `SiYuanApiError` (the kernel's pagination slice panics and recovery flushes an empty HTTP 200), an empty page at the exact-multiple boundary |
 
-All requests are `POST` with JSON bodies. Content writes always send `dataType: "markdown"`, since the endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing.
+All requests are `POST` with JSON bodies. Content writes send `dataType: "markdown"` — the single-op endpoints panic into a silent no-op (`code: 0`, `data: null`) when the field is missing. The sole exception is `transact`: its ops carry no `dataType` at all, and op `data` is block DOM, never markdown.
 
 The encrypted-notebook family is a lifecycle subset: `fullTextSearch()` and `query()` are not box-scoped and read the global plaintext index, so a created encrypted notebook is reachable by id-based reads once unlocked, not by those two.
 
@@ -103,16 +104,20 @@ Retry policy, built in:
 
 ## Scope notes
 
-- **Documented endpoints only, six named exceptions** — five routes absent from SiYuan's API references (the kernel repo's `docs/ENCRYPTED-NOTEBOOK.md` documents the encrypted family's backup pair, so they are not absent from upstream docs entirely), plus the `mode: "readonly"` flag on the documented `/api/query/sql` (kernel-enforced `sqlite3_stmt_readonly` check):
+- **Documented endpoints only, seven named exceptions** — five routes absent from SiYuan's API references (the kernel repo's `docs/ENCRYPTED-NOTEBOOK.md` documents the encrypted family's backup pair, so they are not absent from upstream docs entirely), the `mode: "readonly"` flag on the documented `/api/query/sql` (kernel-enforced `sqlite3_stmt_readonly` check), and `/api/transactions`, which the reference names only to declare it internal (no dedicated section, no stability guarantee):
   - `/api/search/fullTextSearchBlock` — backed by the same kernel function SiYuan's own MCP server exposes.
   - `/api/search/listInvalidBlockRefs`.
   - `/api/notebook/createEncryptedNotebook` — the per-run encrypted fixture lifecycle (create → `closeNotebook` → unlock → remove).
   - `/api/notebook/unlockAndOpenNotebook` — the recovery path out of the locked-box states the lifecycle doc comments describe.
   - `/api/notebook/getEncryptedNotebookStatus` — the precondition gate for `createEncryptedNotebook` (`enabled`) and the recovery-flow read for which encrypted boxes exist and which are locked.
+  - `/api/transactions` — the kernel's real multi-op transaction endpoint, the sync protocol of the frontend app. SiYuan's API reference names it internal and outside the public stability guarantee; its documentation and compatibility contract live here, in the census pin and the manual probe suite. Verified against kernel 3.8.7 — build on it only with a pinned kernel version. The client types the payload (`{ transactions, reqId }`) and does not interpret actions.
 
   The three encrypted routes require a kernel that ships them: on an older kernel the call surfaces as `SiYuanApiError`, with no promised transport shape.
 
-  All are pinned by integration tests.
+  All are pinned by integration tests, except `/api/transactions`, whose
+  live behavior is pinned by the manual probe suite
+  (`tests/transactions.probe.si.test.ts`, opt-in via `SIYUAN_INTEGRATION_PROBE=1`
+  against a live kernel — never runs in CI).
 - The search method hardcodes `method: 0` (keyword). The route also accepts `method: 2` (SQL search), which is an admin-only capability; not exposing it keeps raw SQL reachable only through `query()`.
 - `getVersion()` fetches and returns the version string; it holds no pinned constant and enforces nothing.
 - Types cover only the fields these methods consume; unknown fields pass through via `Record<string, unknown>` intersections.
@@ -124,10 +129,10 @@ npm run typecheck   # tsc --noEmit
 npm test            # vitest unit tests
 npm run lint        # oxlint --deny-warnings
 npm run fmt:check   # oxfmt --check
-node scripts/check-pack.mjs   # tarball contents == tracked non-test .ts files
+node scripts/check-pack.mjs   # tarball contents == tracked root .ts files (tests/ never ships)
 ```
 
-`integration.si.test.ts` runs against a live SiYuan kernel: enabled with `SIYUAN_INTEGRATION=1`, configured via `SIYUAN_BASE_URL` / `SIYUAN_API_TOKEN`, plus `SIYUAN_INTEGRATION_THROTTLE=1` for the 429 throttle case. Unit tests mock `fetch`.
+`tests/integration.si.test.ts` runs against a live SiYuan kernel: enabled with `SIYUAN_INTEGRATION=1`, configured via `SIYUAN_BASE_URL` / `SIYUAN_API_TOKEN`, plus `SIYUAN_INTEGRATION_THROTTLE=1` for the 429 throttle case. The transactions probe (`tests/transactions.probe.si.test.ts`) has its own opt-in flag, `SIYUAN_INTEGRATION_PROBE=1`, and must run alone (`npx vitest run tests/transactions.probe.si.test.ts`) — its queue measurements must not race the integration suite's writes. Unit tests mock `fetch`.
 
 Releases: `npm run release:patch|minor|major` (bumps the version, tags, and pushes; `prepublishOnly` runs tests, typecheck, and a pack-content check).
 

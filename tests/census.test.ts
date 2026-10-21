@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SiYuanKernelClient } from "./client.js";
+import { SiYuanKernelClient } from "../client.js";
 
 /**
  * The public client surface, pinned. Every public client method invocation
@@ -32,6 +32,7 @@ const PINNED_PUBLIC_METHODS = [
 	"removeNotebook",
 	"renameDocByID",
 	"renameNotebook",
+	"transact",
 	"unlockAndOpenNotebook",
 	"updateBlock",
 ] as const;
@@ -54,6 +55,7 @@ const ARGS: { [M in PublicMethod]: Parameters<SiYuanKernelClient[M]> } = {
 	createNotebook: ["x"],
 	deleteBlock: ["x"],
 	exportMarkdown: ["x"],
+	fullTextSearch: [{ query: "x", paths: ["x"] }],
 	getChildBlocks: ["x"],
 	getEncryptedNotebookStatus: [],
 	getHPathByID: ["x"],
@@ -69,7 +71,10 @@ const ARGS: { [M in PublicMethod]: Parameters<SiYuanKernelClient[M]> } = {
 	removeNotebook: ["x"],
 	renameDocByID: ["x", "x"],
 	renameNotebook: ["x", "x"],
-	fullTextSearch: [{ query: "x", paths: ["x"] }],
+	// The wire op shape, verbatim: a `delete` op carries only its id — the
+	// kernel ignores delete anchors; `reqId` is client-generated, so it is
+	// not a call arg.
+	transact: [[{ doOperations: [{ action: "delete", id: "x" }] }]],
 	unlockAndOpenNotebook: ["x", "x"],
 	updateBlock: [{ id: "x", data: "x" }],
 };

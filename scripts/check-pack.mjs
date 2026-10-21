@@ -1,5 +1,6 @@
 // Fails when the publishable tarball does not exactly match the tracked
 // production sources: every root module must ship, and nothing else may.
+// The tests/ tree (suites and shared fixtures) never ships.
 import { execSync } from "node:child_process";
 
 // --ignore-scripts is load-bearing: npm runs `prepare` (husky) around the
@@ -14,7 +15,7 @@ const packed = JSON.parse(pack)[0]
 
 const expected = execSync("git ls-files '*.ts'", { encoding: "utf8" })
 	.split("\n")
-	.filter((f) => f && !f.endsWith(".test.ts"))
+	.filter((f) => f && !f.startsWith("tests/") && !f.endsWith(".test.ts"))
 	.sort();
 
 const missing = expected.filter((f) => !packed.includes(f));

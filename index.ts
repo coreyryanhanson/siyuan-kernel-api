@@ -20,4 +20,6 @@ export type {
 	NotebookList,
 	SearchBlock,
 	SearchResult,
+	Transaction,
+	TransactionOperation,
 } from "./types.js";

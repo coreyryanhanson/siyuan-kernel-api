@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `transact(transactions)` — `/api/transactions`: enqueues kernel
+  transactions of block ops in array order. Each array element is its own
+  atomic unit — the kernel commits and rolls them back independently, so pass
+  a single element for all-or-nothing across ops. Also exports the
+  `Transaction` and `TransactionOperation` payload types (the kernel's
+  request element and post-commit echo are one type).
+
 ## [0.5.0] - 2026-10-14
 
 ### Added

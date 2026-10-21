@@ -60,7 +60,7 @@ export type SearchResult = {
 /** `data` of `/api/notebook/getEncryptedNotebookStatus`. */
 export type EncryptedNotebookStatus = {
 	enabled: boolean;
-	/** Lifecycle states of the workspace's encrypted-notebook feature (v3.8.3 kernel values). */
+	/** Lifecycle states of the workspace's encrypted-notebook feature. */
 	state: "Disabled" | "Enabled" | "RecoveryRequired";
 	count: number;
 	boxes: EncryptedBoxStatus[];
@@ -72,12 +72,34 @@ export type EncryptedBoxStatus = {
 	/** Empty unless the box is currently mounted/unlocked — resolve names through `listNotebooks()`. */
 	name: string;
 	unlocked: boolean;
-	/** Per-box lock states (v3.8.3 kernel values). */
+	/** Per-box lock states. */
 	state: "Locked" | "Unlocking" | "Unlocked" | "Locking" | "Error";
 } & Record<string, unknown>;
 
 /** Row of `/api/block/getChildBlocks`. */
 export type ChildBlock = Record<string, unknown>;
+
+/**
+ * One operation of a `/api/transactions` batch (kernel
+ * `TransactionOperation`). Only `action` is typed: the kernel accepts many
+ * optional fields (anchors, attribute-view fields, …) that this client never
+ * interprets — they pass through untouched. Op `data` rules (inline block
+ * DOM, never markdown; the kernel type-asserts it unguarded) — see
+ * `transact()`.
+ */
+export type TransactionOperation = { action: string } & Record<string, unknown>;
+
+/**
+ * One element of `transact()`'s `transactions` array — the kernel's own
+ * `Transaction` (its request element and post-commit echo are the same
+ * type, so `transact()` returns an array of these). The kernel overwrites
+ * `timestamp` from the request's `reqId`; it never fills `undoOperations` —
+ * a batch enters the editor's global undo log only when the caller supplies
+ * them, and they are then replayed verbatim.
+ */
+export type Transaction = {
+	doOperations: TransactionOperation[];
+} & Record<string, unknown>;
 
 /** `data` of `/api/export/exportMdContent`. */
 export type ExportMarkdownResult = {
@@ -86,9 +108,11 @@ export type ExportMarkdownResult = {
 } & Record<string, unknown>;
 
 /**
- * `data` of the block-write endpoints (insert/append/update/delete). The
- * kernel only sets `ret.Data` on these four — `moveBlock` returns `null`.
- * Extracting `data[0].doOperations[0].id` stays in the extension.
+ * `data` of the single-op block-write endpoints
+ * (insert/append/update/delete) — a narrower echo than `transact()`'s,
+ * which returns the kernel's full `Transaction`. The kernel sets
+ * `ret.Data` there and returns `null` for `moveBlock`. Extracting
+ * `data[0].doOperations[0].id` stays in the extension.
  */
 export type BlockTransaction = {
 	doOperations: ({ id: string } & Record<string, unknown>)[];

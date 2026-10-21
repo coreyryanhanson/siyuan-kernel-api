@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { SiYuanKernelClient } from "./index.js";
+import { SiYuanKernelClient as ClientClass } from "../client.js";
+import { SiYuanKernelClient } from "../index.js";
 
 describe("SiYuanKernelClient constructor", () => {
+	it("index.ts re-exports the client class unchanged", () => {
+		expect(SiYuanKernelClient).toBe(ClientClass);
+	});
+
 	it("rejects empty baseUrl", () => {
 		expect(() => new SiYuanKernelClient("", "token")).toThrow(TypeError);
 	});

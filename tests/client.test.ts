@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SiYuanKernelClient } from "./client.js";
+import { SiYuanKernelClient } from "../client.js";
+import type { Transaction } from "../types.js";
 import {
 	SiYuanApiError,
 	SiYuanAuthError,
@@ -7,7 +8,7 @@ import {
 	SiYuanNetworkError,
 	SiYuanRateLimitError,
 	SiYuanTimeoutError,
-} from "./errors.js";
+} from "../errors.js";
 
 type FetchCall = { url: string; init: RequestInit };
 
@@ -45,24 +46,6 @@ function jsonResponse(
 	});
 }
 
-/** Access the private request core through getVersion's shape; endpoint methods ride the same path. */
-function request(
-	client_: SiYuanKernelClient,
-	path: string,
-	body: unknown,
-	retryable: boolean,
-) {
-	return (
-		client_ as unknown as {
-			request<T>(
-				path: string,
-				body: unknown,
-				opts: { retryable: boolean },
-			): Promise<T>;
-		}
-	).request.bind(client_)<unknown>(path, body, { retryable });
-}
-
 const envelope = (data: unknown) => ({ code: 0, msg: "", data });
 
 afterEach(() => {
@@ -71,9 +54,10 @@ afterEach(() => {
 
 describe("request core", () => {
 	it("POSTs JSON with the auth header to the joined URL", async () => {
-		const { fn, calls } = mockFetch(() => jsonResponse(200, envelope("ok")));
-		const c = client(fn);
-		await request(c, "/api/notebook/lsNotebooks", { a: 1 }, true);
+		const { fn, calls } = mockFetch(() =>
+			jsonResponse(200, envelope({ notebooks: [] })),
+		);
+		await client(fn).listNotebooks();
 
 		expect(calls).toHaveLength(1);
 		expect(calls[0]!.url).toBe(
@@ -84,20 +68,15 @@ describe("request core", () => {
 			"Content-Type": "application/json",
 			Authorization: "Token secret-token",
 		});
-		expect(calls[0]!.init.body).toBe(JSON.stringify({ a: 1 }));
+		expect(calls[0]!.init.body).toBe(JSON.stringify({}));
 	});
 
-	it("attaches a timeout signal to every request", async () => {
+	it("attaches a timeout signal to requests", async () => {
 		const { fn, calls } = mockFetch(() => jsonResponse(200, envelope(null)));
-		await request(client(fn), "/api/system/version", {}, false);
+		await client(fn).getVersion();
 		const signal = calls[0]!.init.signal as AbortSignal;
 		expect(signal).toBeInstanceOf(AbortSignal);
 		expect(signal.aborted).toBe(false);
-	});
-
-	it("unwraps the envelope data", async () => {
-		const { fn } = mockFetch(() => jsonResponse(200, envelope("3.8.3")));
-		await expect(request(client(fn), "/x", {}, true)).resolves.toBe("3.8.3");
 	});
 });
 
@@ -263,9 +242,9 @@ describe("retry policy", () => {
 		const { fn } = mockFetch((_, attempt) =>
 			attempt === 0
 				? new Response("err", { status: 500 })
-				: jsonResponse(200, envelope("ok")),
+				: jsonResponse(200, envelope("3.8.3")),
 		);
-		await expect(request(client(fn), "/read", {}, true)).resolves.toBe("ok");
+		await expect(client(fn).getVersion()).resolves.toBe("3.8.3");
 		expect(fn).toHaveBeenCalledTimes(2);
 	});
 
@@ -273,9 +252,9 @@ describe("retry policy", () => {
 		const { fn } = mockFetch(() => {
 			throw new Error("ECONNREFUSED");
 		});
-		const err = await request(client(fn), "/read", {}, true).catch(
-			(e: unknown) => e,
-		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(err).toBeInstanceOf(SiYuanNetworkError);
 		expect((err as SiYuanNetworkError).cause).toBeInstanceOf(Error);
@@ -285,9 +264,9 @@ describe("retry policy", () => {
 		const { fn } = mockFetch(() => {
 			throw new DOMException("The operation timed out.", "TimeoutError");
 		});
-		const err = await request(client(fn), "/read", {}, true).catch(
-			(e: unknown) => e,
-		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(err).toBeInstanceOf(SiYuanTimeoutError);
 		expect((err as SiYuanTimeoutError).timeoutMs).toBe(30_000);
@@ -295,9 +274,9 @@ describe("retry policy", () => {
 
 	it("throws SiYuanApiError after both read attempts fail with 5xx", async () => {
 		const { fn } = mockFetch(() => new Response("err", { status: 503 }));
-		const err = await request(client(fn), "/read", {}, true).catch(
-			(e: unknown) => e,
-		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(err).toBeInstanceOf(SiYuanApiError);
 		expect((err as SiYuanApiError).status).toBe(503);
@@ -307,9 +286,9 @@ describe("retry policy", () => {
 		const { fn } = mockFetch(() => {
 			throw undefined;
 		});
-		const err = await request(client(fn), "/read", {}, false).catch(
-			(e: unknown) => e,
-		);
+		const err = await client(fn)
+			.removeDocByID("d1")
+			.catch((e: unknown) => e);
 		expect(err).toBeInstanceOf(SiYuanNetworkError);
 		expect((err as SiYuanNetworkError).cause).toBeUndefined();
 	});
@@ -327,47 +306,86 @@ describe("retry policy", () => {
 			});
 			return res;
 		});
-		const err = await request(client(fn), "/read", {}, true).catch(
-			(e: unknown) => e,
-		);
+		const err = await client(fn)
+			.getVersion()
+			.catch((e: unknown) => e);
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(err).toBeInstanceOf(SiYuanTimeoutError);
-	});
-
-	it("never retries a write on 5xx (exactly 1 call), then throws SiYuanApiError", async () => {
-		const { fn } = mockFetch(() => new Response("err", { status: 500 }));
-		const err = await request(client(fn), "/write", {}, false).catch(
-			(e: unknown) => e,
-		);
-		expect(fn).toHaveBeenCalledTimes(1);
-		expect(err).toBeInstanceOf(SiYuanApiError);
-		expect((err as SiYuanApiError).status).toBe(500);
-	});
-
-	it("never retries a write on network failure (exactly 1 call), then throws SiYuanNetworkError", async () => {
-		const { fn } = mockFetch(() => {
-			throw new Error("ECONNREFUSED");
-		});
-		await expect(request(client(fn), "/write", {}, false)).rejects.toThrow(
-			SiYuanNetworkError,
-		);
-		expect(fn).toHaveBeenCalledTimes(1);
 	});
 
 	it.each([401, 403, 429])(
 		"never retries on %i (exactly 1 call)",
 		async (status) => {
-			for (const retryable of [true, false]) {
-				const { fn } = mockFetch(() =>
-					jsonResponse(status, { code: -1, msg: "x" }),
-				);
-				await expect(
-					request(client(fn), "/x", {}, retryable),
-				).rejects.toThrow();
-				expect(fn).toHaveBeenCalledTimes(1);
-			}
+			const { fn: readFn } = mockFetch(() =>
+				jsonResponse(status, { code: -1, msg: "x" }),
+			);
+			await expect(client(readFn).getVersion()).rejects.toThrow();
+			expect(readFn).toHaveBeenCalledTimes(1);
+
+			const { fn: writeFn } = mockFetch(() =>
+				jsonResponse(status, { code: -1, msg: "x" }),
+			);
+			await expect(client(writeFn).removeDocByID("d1")).rejects.toThrow();
+			expect(writeFn).toHaveBeenCalledTimes(1);
 		},
 	);
+
+	it("reads retry once on 5xx (2 calls); writes never retry (1 call)", async () => {
+		for (const [call, expected] of [
+			[(c: SiYuanKernelClient) => c.getVersion(), 2],
+			[(c: SiYuanKernelClient) => c.query("SELECT id FROM blocks LIMIT 1"), 2],
+			[
+				(c: SiYuanKernelClient) =>
+					c.fullTextSearch({ query: "q", paths: ["nb1"] }),
+				2,
+			],
+			[(c: SiYuanKernelClient) => c.listNotebooks(), 2],
+			[(c: SiYuanKernelClient) => c.listInvalidBlockRefs(), 2],
+			[(c: SiYuanKernelClient) => c.exportMarkdown("d1"), 2],
+			[(c: SiYuanKernelClient) => c.getChildBlocks("b1"), 2],
+			[(c: SiYuanKernelClient) => c.getHPathByID("d1"), 2],
+			[(c: SiYuanKernelClient) => c.getEncryptedNotebookStatus(), 2],
+			[(c: SiYuanKernelClient) => c.createNotebook("NB"), 1],
+			[(c: SiYuanKernelClient) => c.createEncryptedNotebook("NB", "pw"), 1],
+			[(c: SiYuanKernelClient) => c.unlockAndOpenNotebook("nb", "pw"), 1],
+			[(c: SiYuanKernelClient) => c.renameNotebook("nb", "New"), 1],
+			[(c: SiYuanKernelClient) => c.openNotebook("nb"), 1],
+			[(c: SiYuanKernelClient) => c.closeNotebook("nb"), 1],
+			[(c: SiYuanKernelClient) => c.renameDocByID("d", "t"), 1],
+			[
+				(c: SiYuanKernelClient) => c.insertBlock({ data: "x", parentID: "p" }),
+				1,
+			],
+			[
+				(c: SiYuanKernelClient) => c.appendBlock({ data: "x", parentID: "p" }),
+				1,
+			],
+			[(c: SiYuanKernelClient) => c.updateBlock({ id: "b1", data: "x" }), 1],
+			[(c: SiYuanKernelClient) => c.deleteBlock("b1"), 1],
+			[
+				(c: SiYuanKernelClient) =>
+					c.transact([{ doOperations: [{ action: "delete", id: "b1" }] }]),
+				1,
+			],
+			[(c: SiYuanKernelClient) => c.moveBlock({ id: "b1", parentID: "p" }), 1],
+			[
+				(c: SiYuanKernelClient) =>
+					c.createDocWithMarkdown({ notebook: "b", path: "/", markdown: "m" }),
+				1,
+			],
+			[(c: SiYuanKernelClient) => c.removeDocByID("d"), 1],
+			[(c: SiYuanKernelClient) => c.removeNotebook("nb"), 1],
+			[
+				(c: SiYuanKernelClient) =>
+					c.moveDocsByID({ fromIDs: ["a"], toID: "nb1" }),
+				1,
+			],
+		] as const) {
+			const { fn } = mockFetch(() => new Response("err", { status: 500 }));
+			await expect(call(client(fn))).rejects.toThrow(SiYuanApiError);
+			expect(fn).toHaveBeenCalledTimes(expected);
+		}
+	});
 });
 
 describe("endpoint surface", () => {
@@ -504,33 +522,38 @@ describe("endpoint surface", () => {
 
 	it.each([
 		[
+			"removeNotebook",
 			(c: SiYuanKernelClient) => c.removeNotebook("nb1"),
 			"/api/notebook/removeNotebook",
 			{ notebook: "nb1" },
 		],
 		[
+			"renameNotebook",
 			(c: SiYuanKernelClient) => c.renameNotebook("nb1", "Renamed"),
 			"/api/notebook/renameNotebook",
 			{ notebook: "nb1", name: "Renamed" },
 		],
 		[
+			"openNotebook",
 			(c: SiYuanKernelClient) => c.openNotebook("nb1"),
 			"/api/notebook/openNotebook",
 			{ notebook: "nb1" },
 		],
 		[
+			"closeNotebook",
 			(c: SiYuanKernelClient) => c.closeNotebook("nb1"),
 			"/api/notebook/closeNotebook",
 			{ notebook: "nb1" },
 		],
 		[
+			"unlockAndOpenNotebook",
 			(c: SiYuanKernelClient) => c.unlockAndOpenNotebook("nb1", "pw"),
 			"/api/notebook/unlockAndOpenNotebook",
 			{ notebook: "nb1", password: "pw" },
 		],
 	] as const)(
 		"%s posts the endpoint's real fields and returns null",
-		async (call, path, body) => {
+		async (_method, call, path, body) => {
 			const { fn, calls } = mockFetch(() => okBody(null));
 			await expect(call(client(fn))).resolves.toBeNull();
 			expect(calls[0]!.url).toBe(`http://127.0.0.1:6806${path}`);
@@ -628,11 +651,9 @@ describe("endpoint surface", () => {
 		expect(calls[0]!.init.body).toBe(JSON.stringify({ page: 2, pageSize: 5 }));
 	});
 
-	it("listInvalidBlockRefs resolves null for a page past the panic boundary", async () => {
+	it("listInvalidBlockRefs resolves null when a success envelope carries null data", async () => {
 		const { fn } = mockFetch(() => okBody(null));
-		await expect(
-			client(fn).listInvalidBlockRefs({ page: 9999 }),
-		).resolves.toBeNull();
+		await expect(client(fn).listInvalidBlockRefs()).resolves.toBeNull();
 	});
 
 	it("listInvalidBlockRefs unwraps the exact-multiple empty page object", async () => {
@@ -799,56 +820,46 @@ describe("endpoint surface", () => {
 			JSON.stringify({ fromIDs: ["a", "b"], toID: "nb1" }),
 		);
 	});
+});
 
-	it("reads retry once on 5xx (2 calls); writes never retry (1 call)", async () => {
-		for (const [call, expected] of [
-			[(c: SiYuanKernelClient) => c.getVersion(), 2],
-			[(c: SiYuanKernelClient) => c.query("SELECT id FROM blocks LIMIT 1"), 2],
-			[
-				(c: SiYuanKernelClient) =>
-					c.fullTextSearch({ query: "q", paths: ["nb1"] }),
-				2,
-			],
-			[(c: SiYuanKernelClient) => c.listNotebooks(), 2],
-			[(c: SiYuanKernelClient) => c.listInvalidBlockRefs(), 2],
-			[(c: SiYuanKernelClient) => c.exportMarkdown("d1"), 2],
-			[(c: SiYuanKernelClient) => c.getChildBlocks("b1"), 2],
-			[(c: SiYuanKernelClient) => c.getHPathByID("d1"), 2],
-			[(c: SiYuanKernelClient) => c.getEncryptedNotebookStatus(), 2],
-			[(c: SiYuanKernelClient) => c.createNotebook("NB"), 1],
-			[(c: SiYuanKernelClient) => c.createEncryptedNotebook("NB", "pw"), 1],
-			[(c: SiYuanKernelClient) => c.unlockAndOpenNotebook("nb", "pw"), 1],
-			[(c: SiYuanKernelClient) => c.renameNotebook("nb", "New"), 1],
-			[(c: SiYuanKernelClient) => c.openNotebook("nb"), 1],
-			[(c: SiYuanKernelClient) => c.closeNotebook("nb"), 1],
-			[(c: SiYuanKernelClient) => c.renameDocByID("d", "t"), 1],
-			[
-				(c: SiYuanKernelClient) => c.insertBlock({ data: "x", parentID: "p" }),
-				1,
-			],
-			[
-				(c: SiYuanKernelClient) => c.appendBlock({ data: "x", parentID: "p" }),
-				1,
-			],
-			[(c: SiYuanKernelClient) => c.updateBlock({ id: "b1", data: "x" }), 1],
-			[(c: SiYuanKernelClient) => c.deleteBlock("b1"), 1],
-			[(c: SiYuanKernelClient) => c.moveBlock({ id: "b1", parentID: "p" }), 1],
-			[
-				(c: SiYuanKernelClient) =>
-					c.createDocWithMarkdown({ notebook: "b", path: "/", markdown: "m" }),
-				1,
-			],
-			[(c: SiYuanKernelClient) => c.removeDocByID("d"), 1],
-			[(c: SiYuanKernelClient) => c.removeNotebook("nb"), 1],
-			[
-				(c: SiYuanKernelClient) =>
-					c.moveDocsByID({ fromIDs: ["a"], toID: "nb1" }),
-				1,
-			],
-		] as const) {
-			const { fn } = mockFetch(() => new Response("err", { status: 500 }));
-			await expect(call(client(fn))).rejects.toThrow(SiYuanApiError);
-			expect(fn).toHaveBeenCalledTimes(expected);
+describe("transact", () => {
+	const batch: [Transaction, ...Transaction[]] = [
+		{ doOperations: [{ action: "delete", id: "blk-1" }] },
+	];
+
+	it("posts { transactions, reqId } and nothing else, returning the post-commit echo", async () => {
+		const echo = [{ doOperations: [{ id: "blk-1" }] }];
+		const { fn, calls } = mockFetch(() => jsonResponse(200, envelope(echo)));
+		await expect(client(fn).transact(batch)).resolves.toEqual(echo);
+		const body = JSON.parse(calls[0]!.init.body as string) as Record<
+			string,
+			unknown
+		>;
+		expect(Object.keys(body).sort()).toEqual(["reqId", "transactions"]);
+		expect(body.transactions).toEqual(batch);
+	});
+
+	it("stamps a strictly increasing reqId — same-millisecond ties and a backwards clock both order after the previous stamp", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(1_000_000);
+			const { fn, calls } = mockFetch(() => jsonResponse(200, envelope([])));
+			const c = client(fn);
+			await c.transact(batch);
+			// Same millisecond: the Math.max arm breaks the tie with +1.
+			vi.setSystemTime(1_000_000);
+			await c.transact(batch);
+			// Clock steps backwards: the stamp still cannot regress.
+			vi.setSystemTime(900_000);
+			await c.transact(batch);
+			const reqIds = calls.map(
+				(call) =>
+					(JSON.parse(call.init.body as string) as { reqId: number }).reqId,
+			);
+			expect(reqIds[1]!).toBe(reqIds[0]! + 1);
+			expect(reqIds[2]!).toBe(reqIds[1]! + 1);
+		} finally {
+			vi.useRealTimers();
 		}
 	});
 });

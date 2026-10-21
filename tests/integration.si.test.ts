@@ -8,70 +8,34 @@
  * the host IP out for ~4 min, so it is opt-in even within an enabled suite.
  * Never wire this into CI and never run the suite twice in quick succession.
  *
- * Execution order is load-bearing and equals this file's declaration order:
- *
- *   1. search `paths`-shape pin      (first asserted case, after setup/seeding)
- *   2. auth smoke matrix
- *   3. verified-create contract pin (+ getHPathByID containing-doc and
- *      unknown-id pins)
- *   4. notebook-lifecycle round-trip pin (client-driven, self-cleaning)
- *   5. renameDocByID hPath pin + getHPathByID live-tree freshness and
- *      box-doc pins (guarded on the `boxDocEnabled` envelope flag from
- *      listNotebooks — with the flag on the rename call renames the
- *      notebook, a destructive side effect, so it is skipped)
- *   6. listInvalidBlockRefs round-trip pin (planted orphan, self-cleaning)
- *   7. encrypted-notebook stage-A pins (fixture-free, stateless: typed
- *      status shape, 310 precondition rejection guarded on the live
- *      encryption state, 319 rejection for a well-formed unknown id)
- *   8. encrypted-notebook stage-B round-trip (self-cleaning; needs
- *      SIYUAN_MASTER_PASSWORD and an encryption-enabled workspace —
- *      otherwise it self-skips)
- *   9. auth-throttle contract pin    (last — arms the lockout)
- *
- * The suite opts out of concurrency (`concurrent: false`, this vitest's
- * explicit knob) — a concurrent run would re-arm the throttle mid-suite.
- * The auth smoke matrix is kernel-dependent but touches no fixtures, so the
- * search shape pin runs first among asserted cases.
- * Future fixtures and cases go above the throttle pin only when they must run
- * before the lockout arms; everything after it runs under the armed lock.
- *
- * curl precursor (host-side, observed live @ 3.8.3):
- *   - correctly-shaped `paths: [<boxId>]` narrows results to the fixture box
- *     (1 row, box = fixture box)
- *   - a deliberately wrong `boxes` field is ignored: the query degrades to
- *     whole-workspace results (a unique marker outside the path filter was
- *     still returned with `boxes: [nonexistent-id]`)
- *   - getEncryptedNotebookStatus on the encryption-off workspace returns
- *     every envelope field: enabled:false / state:"Disabled" / count:0 /
- *     boxes:[] / migrationPending:false / migrationBoxes:null (null, not
- *     [], when empty) / hasHistoryDependency:false
- *   - createEncryptedNotebook {name, password} on the encryption-off
- *     workspace answers code:-1 "Encrypted notebook feature is not
- *     enabled" (Language(310)) without touching any state
- *   - unlockAndOpenNotebook with a well-formed unknown id
- *     (20240101000000-zzzzzzz) answers code:-1 "Notebook is not encrypted"
- *     (Language(319)) with lsNotebooks byte-identical before/after
- *   - on the encryption-enabled workspace, the stage-B round-trip ran live:
- *     createEncryptedNotebook returns the notebook mounted and unlocked,
- *     closeNotebook locks it, a wrong password against the locked box
- *     answers code:-1 "Incorrect master password" (Language(311)) and the
- *     correct password unlocks it, a plain notebook answers code:-1
- *     "Notebook is not encrypted" (Language(319)), and removeNotebook
- *     deletes the encrypted box in the unlocked state (observed through
- *     the suite, not raw curl)
+ * Execution order is load-bearing and equals this file's declaration order;
+ * each `it()` documents the behavior it pins. The suite opts out of
+ * concurrency (`concurrent: false`, this vitest's explicit knob) — a
+ * concurrent run would re-arm the throttle mid-suite. The auth smoke matrix
+ * is kernel-dependent but touches no fixtures, so the search shape pin runs
+ * first among asserted cases, and the auth-throttle pin runs last because it
+ * arms the IP lockout. Future fixtures and cases go above the throttle pin
+ * only when they must run before the lockout arms; everything after it runs
+ * under the armed lock.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SiYuanKernelClient } from "./client.js";
+import { SiYuanKernelClient } from "../client.js";
 import {
 	SiYuanApiError,
 	SiYuanAuthError,
 	SiYuanRateLimitError,
-} from "./errors.js";
-import type { SearchResult } from "./types.js";
+} from "../errors.js";
+import type { SearchResult } from "../types.js";
+import {
+	BASE_URL,
+	EXPECTED_VERSION,
+	TOKEN,
+	rawPost,
+	sleep,
+	waitFor,
+} from "./support.js";
 
-const BASE_URL = process.env.SIYUAN_BASE_URL ?? "";
-const TOKEN = process.env.SIYUAN_API_TOKEN ?? "";
 const ENABLED = process.env.SIYUAN_INTEGRATION === "1";
 const CONFIGURED = BASE_URL !== "" && TOKEN !== "" && ENABLED;
 /** Throttle pin locks the host IP out for ~4 min — opt-in within the suite. */
@@ -83,51 +47,16 @@ const THROTTLE_ENABLED = process.env.SIYUAN_INTEGRATION_THROTTLE === "1";
 const MASTER_PASSWORD = process.env.SIYUAN_MASTER_PASSWORD ?? "";
 const STAGE_B_ENABLED = ENABLED && MASTER_PASSWORD !== "";
 
-/** Test constant, not a client constant — the client ships no pinned version. */
-const EXPECTED_VERSION = "3.8.7";
-
 /**
- * Throttle lockout math (kernel @ 3.8.3): locked requests *overwrite* the
- * lock, `30 << (FailCount - 5)` — FailCount 8 after this suite's 8 requests
- * → 240 s. The passive wait must cover the last extension, not the sum.
+ * Throttle lockout math: locked requests recompute the lock deadline from
+ * now — exponential backoff from a 30 s base, one doubling per failure
+ * beyond the 5-failure threshold — so FailCount 8 after this suite's 8
+ * requests → 240 s. The passive wait must cover the last extension, not the
+ * sum.
  */
 const THROTTLE_LOCK_MS = 240_000;
 /** Lock is 240 s; margin must absorb clock/timing skew — 5 s raced it once. */
 const SLEEP_MARGIN_MS = 15_000;
-/** FTS/SQL index may lag raw writes; bounded wait before giving up. */
-const INDEX_WAIT_MS = 30_000;
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** Poll until `done` holds or the index-wait budget is spent. */
-async function waitFor<T>(
-	probe: () => Promise<T>,
-	done: (value: T) => boolean,
-): Promise<T> {
-	const deadline = Date.now() + INDEX_WAIT_MS;
-	let value = await probe();
-	while (!done(value) && Date.now() <= deadline) {
-		await sleep(1_000);
-		value = await probe();
-	}
-	return value;
-}
-
-/** Raw documented-HTTP call, bypassing the client — fixture setup only. */
-function rawPost(
-	path: string,
-	body: unknown,
-	token = TOKEN,
-): Promise<Response> {
-	return fetch(`${BASE_URL}${path}`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			...(token === "" ? {} : { Authorization: `Token ${token}` }),
-		},
-		body: JSON.stringify(body),
-	});
-}
 
 async function envelopeData(res: Response): Promise<unknown> {
 	const body = (await res.json()) as {
@@ -210,7 +139,7 @@ describe.skipIf(!CONFIGURED)(
 			// throttle lock is still held (the throttle pin's abort path) —
 			// stop instead of running the kernel-dependent cases into the lock.
 			// Must be a guarded endpoint: /api/system/version is
-			// unauthenticated (observed live @ 3.8.3), so it never 429s and
+			// unauthenticated, so it never 429s and
 			// never touches the throttle counter.
 			try {
 				await client.listNotebooks();
@@ -282,8 +211,7 @@ describe.skipIf(!CONFIGURED)(
 				// An empty result must not pass.
 				expect(hasMarker(result)).toBe(true);
 				// Every returned row is scoped to the fixture box. The wrong-`boxes`
-				// degradation half is carried by the curl precursor observation in
-				// the header comment, not asserted live (no stable cross-box term).
+				// degradation half is not asserted live (no stable cross-box term).
 				for (const block of result.blocks) {
 					expect(block.box).toBe(fixtureABox);
 				}
@@ -331,7 +259,7 @@ describe.skipIf(!CONFIGURED)(
 
 				// Box-scoped re-lookup: exactly two type='d' rows (the fixture
 				// notebook carries no other docs at that path). Bounded wait — the
-				// blocks table lags doc creation (~3 s on 3.8.3, observed live).
+				// blocks table lags doc creation by a few seconds.
 				const rows = await waitFor(
 					() =>
 						client.query(
@@ -515,12 +443,11 @@ describe.skipIf(!CONFIGURED)(
 				expect(typeof row?.content).toBe("string");
 				expect(typeof row?.updated).toBe("string");
 
-				// Page far beyond the result set: at kernel 3.8.6 the pagination
+				// Page far beyond the result set: the pagination
 				// slice panics (start > len) and the recovery middleware flushes an
 				// empty HTTP 200 — the client maps that to SiYuanApiError (an empty
 				// body is indistinguishable from proxy corruption, so it is never
-				// silently null). At 3.8.3 the same request returned code: 0/
-				// data: null; the envelope-null path is still pinned in client.test.ts.
+				// silently null).
 				await expect(
 					client.listInvalidBlockRefs({ page: 9999 }),
 				).rejects.toBeInstanceOf(SiYuanApiError);
@@ -593,7 +520,7 @@ describe.skipIf(!CONFIGURED)(
 			// The id matches the kernel's node-ID pattern (14 digits + 7
 			// lowercase alphanumerics) but exists nowhere: Language(319)
 			// fires before any crypto or state change — lsNotebooks is
-			// byte-identical before/after (observed live @ 3.8.3). A
+			// byte-identical before/after. A
 			// malformed id would fail earlier with "invalid ID argument"
 			// instead, and a real encrypted-box id would fail later with
 			// 311/316 — both are different pins.
@@ -716,7 +643,7 @@ describe.skipIf(!CONFIGURED)(
 
 				// 6 bogus failures; the 6th arms the lock and returns 401. All
 				// throttle legs use a guarded endpoint — getVersion is
-				// unauthenticated @ 3.8.3 and would succeed with a bogus token.
+				// unauthenticated and would succeed with a bogus token.
 				for (let i = 0; i < 6; i++) {
 					await expect(bogus.listNotebooks()).rejects.toBeInstanceOf(
 						SiYuanAuthError,
@@ -724,9 +651,9 @@ describe.skipIf(!CONFIGURED)(
 				}
 				expect(counter.count).toBe(6);
 
-				// 7th bogus call: the distinct 429. If 3.8.3 behaves differently,
-				// record reality — the pass criterion is the post-6th-failure 429,
-				// not the literal ordinal.
+				// 7th bogus call: the distinct 429. If a kernel version behaves
+				// differently, record reality — the pass criterion is the
+				// post-6th-failure 429, not the literal ordinal.
 				const seventh = await bogus.listNotebooks().then(
 					() => null,
 					(err: unknown) => err,
@@ -750,9 +677,7 @@ describe.skipIf(!CONFIGURED)(
 				// Passive wait ≥ the served lock with ZERO kernel calls — any
 				// request during the lock re-enters AuthThrottleFail and pushes
 				// the lock out, so a poll loop cannot terminate. Trust the 8th
-				// call's Retry-After over the computed 240 s: the served lock
-				// drifted past the computed value in a live run (observed 226 s
-				// remaining after a 255 s sleep).
+				// call's Retry-After over the computed 240 s.
 				const waitMs =
 					Math.max(THROTTLE_LOCK_MS, eighthRetryAfter * 1000) + SLEEP_MARGIN_MS;
 				await sleep(waitMs);
